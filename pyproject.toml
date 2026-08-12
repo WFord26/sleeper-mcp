@@ -1,0 +1,12 @@
+[project]
+name = "sleeper-fantasy-mcp"
+version = "1.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp",
+    "httpx",
+    "pydantic",
+]
+
+[project.scripts]
+sleeper-mcp = "sleeper_fantasy_mcp:mcp.run"
