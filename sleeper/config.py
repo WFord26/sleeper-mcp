@@ -11,6 +11,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# Load .env from the repo root if present; env vars already in the shell win.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+except ImportError:
+    pass  # python-dotenv is an optional web extra; core MCP runs without it
+
 # ── Identity ────────────────────────────────────────────────────────────────
 SLEEPER_USERNAME: str = os.getenv("SLEEPER_USERNAME", "GronkQuixote")
 

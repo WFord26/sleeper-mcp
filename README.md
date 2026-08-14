@@ -161,8 +161,11 @@ A browser dashboard for the all play grid, with live updates during games. See
 for the design rationale.
 
 ```bash
-# install the web extras once
+# install the web extras once (includes python-dotenv)
 uv pip install -e ".[web]"
+
+# copy the example env file and edit as needed
+cp .env.example .env
 
 # run it
 uv run web/app.py
@@ -172,6 +175,10 @@ uv run web/app.py
 Three views: **standings** (sortable, with the luck column), **head to head
 grid** (the everyone vs everyone matrix), and **by week** (each week's scores
 with how many teams you would have beaten that week).
+
+![Standings view](docs/assets/standings.png)
+![Head-to-head grid](docs/assets/h2h-grid.png)
+![By week](docs/assets/by-week.png)
 
 The server polls Sleeper on one background task and pushes updates to every open
 tab over server sent events, so upstream call volume stays flat no matter how
@@ -201,7 +208,13 @@ is ever refetched.
 
 ### Configuration
 
-Every value has a working default; override only what you need.
+Every value has a working default; override only what you need. The dashboard
+loads a `.env` file from the repo root automatically (shell environment variables
+always win over `.env`). Copy `.env.example` to get started:
+
+```bash
+cp .env.example .env
+```
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -209,6 +222,7 @@ Every value has a working default; override only what you need.
 | `SLEEPER_LEAGUE_ID` | unset | Pin a specific league, skipping name matching |
 | `SLEEPER_LEAGUE_MATCH` | `chrysoloras` | League name fragment to match |
 | `SLEEPER_SEASON` | `2026` | Active season |
+| `SLEEPER_WEB_HOST` | `127.0.0.1` | Dashboard bind address |
 | `SLEEPER_WEB_PORT` | `8080` | Dashboard port |
 | `SLEEPER_POLL_LIVE` | `30` | Poll seconds during games |
 | `SLEEPER_POLL_IDLE` | `900` | Poll seconds otherwise |

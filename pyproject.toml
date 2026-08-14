@@ -17,6 +17,7 @@ dependencies = [
 web = [
     "starlette",
     "uvicorn",
+    "python-dotenv",
 ]
 dev = [
     "pytest",
