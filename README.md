@@ -1,6 +1,6 @@
 # Sleeper Fantasy Football MCP Server
 
-A FastMCP Python server that connects Claude to the **Sleeper public API** for managing your fantasy football team. Pre-configured for **GronkQuixote** in **The Chrysoloras Gang** (12-team Full PPR).
+A FastMCP Python server that connects Claude to the **Sleeper public API** for managing your fantasy football team. Defaults to **GronkQuixote** in **The Chrysoloras Gang**, but username and league are changeable at runtime without restarting the server.
 
 No API key needed — the Sleeper API is fully public.
 
@@ -146,6 +146,102 @@ Fully quit (Cmd-Q) and relaunch Claude Desktop after saving — it only reads th
 | `sleeper_get_weather_report` | Forecast for a player's (or your whole roster's) next game, with a fantasy-impact note |
 | `sleeper_get_snap_report` | Snap share and rush/target usage trend over recent weeks — an early breakout signal |
 | `sleeper_get_draft_best_available` | Live draft-day board: best remaining players by ADP, on-the-clock tracking, positional scarcity |
+| `sleeper_get_all_play_standings` | All play standings: every team scored against every other team every week, with a luck column |
+| `sleeper_get_head_to_head_grid` | Everyone vs everyone matrix — each team's record against each other team |
+| `sleeper_get_config` | Show the active username, league, and season settings |
+| `sleeper_set_username` | Switch to a different Sleeper username (no restart needed) |
+| `sleeper_set_league` | Switch to a different league by name or league ID (no restart needed) |
+
+---
+
+## Dashboard
+
+A browser dashboard for the all play grid, with live updates during games. See
+[docs/adr_001_head_to_head_dashboard.md](docs/adr_001_head_to_head_dashboard.md)
+for the design rationale.
+
+```bash
+# install the web extras once
+uv pip install -e ".[web]"
+
+# run it
+uv run web/app.py
+# then open http://127.0.0.1:8080
+```
+
+Three views: **standings** (sortable, with the luck column), **head to head
+grid** (the everyone vs everyone matrix), and **by week** (each week's scores
+with how many teams you would have beaten that week).
+
+The server polls Sleeper on one background task and pushes updates to every open
+tab over server sent events, so upstream call volume stays flat no matter how
+many tabs are open. Polling is every 30 seconds during game windows and every 15
+minutes otherwise; it idles entirely when nobody is watching.
+
+### Architecture
+
+Per ADR 001, shared logic lives in `sleeper/` and both surfaces are thin
+adapters over it, so scoring can never drift between Claude and the dashboard.
+
+```
+sleeper/
+  config.py    settings, overridable by env var or runtime MCP tools
+  client.py    one pooled httpx client, retry, rate limit guard
+  cache.py     TTL cache per data class, disk persistence for the player map
+  scoring.py   fantasy point calculation (the only copy)
+  league.py    typed data access plus the all play model
+  render.py    data -> markdown, used only by the MCP adapter
+sleeper_fantasy_mcp.py   MCP adapter (18 tools)
+web/app.py               dashboard adapter (JSON + SSE)
+```
+
+Key caching decision: completed weeks are immutable, so they are cached forever
+and a full season of history costs at most 17 API calls. Only the current week
+is ever refetched.
+
+### Configuration
+
+Every value has a working default; override only what you need.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SLEEPER_USERNAME` | `GronkQuixote` | Sleeper account |
+| `SLEEPER_LEAGUE_ID` | unset | Pin a specific league, skipping name matching |
+| `SLEEPER_LEAGUE_MATCH` | `chrysoloras` | League name fragment to match |
+| `SLEEPER_SEASON` | `2026` | Active season |
+| `SLEEPER_WEB_PORT` | `8080` | Dashboard port |
+| `SLEEPER_POLL_LIVE` | `30` | Poll seconds during games |
+| `SLEEPER_POLL_IDLE` | `900` | Poll seconds otherwise |
+
+You can also change username and league **at runtime** without restarting the server, using the MCP tools:
+
+```
+# In Claude:
+Switch to username JohnDoe
+Change my league to Dynasty Kings
+Set league ID to 1234567890
+What username is the Sleeper MCP using?
+```
+
+Runtime changes take effect immediately and flush the relevant cache entries.
+
+Point it at a past season to browse history:
+
+```bash
+SLEEPER_LEAGUE_ID=1257056909626724352 SLEEPER_SEASON=2025 uv run web/app.py
+```
+
+### Tests
+
+```bash
+python3 -m pytest tests/test_allplay.py -q   # all play model, 14 tests
+
+# golden file check: proves a refactor did not change MCP tool output
+python3 tests/golden.py capture before
+# ...make changes...
+python3 tests/golden.py capture after
+python3 tests/golden.py diff
+```
 
 ---
 
@@ -167,6 +263,12 @@ Check the snap share trend for my RB2
 Who's the best player available in my draft?
 Best available RBs right now in the draft
 Who's on the clock?
+
+# Change identity at runtime (no restart needed)
+Switch to username TDMachine99
+Change my league to Dynasty Kings
+Set league ID to 1234567890
+What username and league am I connected to?
 ```
 
 ---

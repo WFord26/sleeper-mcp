@@ -1,6 +1,10 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "sleeper-fantasy-mcp"
-version = "1.0.0"
+version = "2.0.0"
 requires-python = ">=3.11"
 dependencies = [
     "fastmcp",
@@ -8,5 +12,23 @@ dependencies = [
     "pydantic",
 ]
 
+[project.optional-dependencies]
+# Only the dashboard needs these; the MCP server runs without them.
+web = [
+    "starlette",
+    "uvicorn",
+]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+
 [project.scripts]
 sleeper-mcp = "sleeper_fantasy_mcp:mcp.run"
+
+# Discovery must be explicit. Once web/ was added there were two top level
+# directories, and setuptools refuses to guess which are distributable packages.
+# web/ and tests/ and scripts/ are run in place, not installed.
+[tool.setuptools]
+packages = ["sleeper"]
+py-modules = ["sleeper_fantasy_mcp"]

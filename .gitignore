@@ -8,3 +8,16 @@ __pycache__/
 # DS_Store
 .DS_Store
 
+
+# golden capture output (regenerate locally)
+tests/golden/
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Test/lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

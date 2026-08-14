@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>All Play Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0b18;
+    --surface: #16162c;
+    --surface-2: #191934;
+    --border: #24244a;
+    --text: #fcfcfc;
+    --muted: #9a9ab8;
+    --dim: #6a6a92;
+    --accent: #3cbcfc;
+    --win: #58f898;
+    --loss: #f85858;
+    --warn: #fcd800;
+    --pixel: "Press Start 2P", ui-monospace, Menlo, monospace;
+    --data: "Silkscreen", ui-monospace, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.6 var(--data);
+    -webkit-font-smoothing: none;
+  }
+  .wrap { max-width: 1340px; margin: 0 auto; padding: 28px 24px 60px; }
+
+  header { display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap; margin-bottom: 22px; }
+  .eyebrow { font-family: var(--pixel); font-size: 11px; color: var(--accent); letter-spacing: .08em; margin-bottom: 12px; }
+  h1 { font-family: var(--pixel); font-size: 26px; line-height: 1.35; font-weight: 400; margin: 0; text-shadow: 4px 4px 0 var(--loss); }
+  .status {
+    margin-left: auto; display: flex; align-items: center; gap: 10px;
+    background: var(--surface); padding: 10px 14px;
+    box-shadow: -4px 0 var(--surface), 4px 0 var(--surface), 0 -4px var(--surface), 0 4px var(--surface);
+  }
+  .dot { width: 10px; height: 10px; background: var(--win); animation: blink 1s steps(1, end) infinite; }
+  .dot.stale { background: var(--warn); }
+  .dot.err { background: var(--loss); animation: none; }
+  #status-text { font-size: 13px; color: var(--muted); }
+  @keyframes blink { 0%, 49% { opacity: 1 } 50%, 100% { opacity: 0 } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none } }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-bottom: 26px; }
+  .card {
+    background: var(--surface); padding: 16px 18px 18px;
+    box-shadow: -4px 0 var(--surface), 4px 0 var(--surface), 0 -4px var(--surface), 0 4px var(--surface);
+  }
+  .card .label { font-family: var(--pixel); font-size: 8px; letter-spacing: .1em; color: var(--muted); line-height: 1.6; }
+  .card .value { font-size: 19px; margin-top: 12px; line-height: 1.2; }
+  .card .note { font-size: 14px; margin-top: 8px; color: var(--muted); }
+
+  .tabs { display: flex; gap: 8px; margin: 0; }
+  .tab {
+    font-family: var(--pixel); font-size: 9px; letter-spacing: .06em;
+    padding: 12px 16px; border: 0; background: var(--surface); color: var(--dim); cursor: pointer;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.on { background: var(--accent); color: var(--bg); }
+  .panel { display: none; }
+  .panel.on { display: block; }
+
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  #standings { background: var(--surface); }
+  th, td { padding: 11px 10px; text-align: right; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  th {
+    font-family: var(--pixel); font-size: 8px; letter-spacing: .08em; color: var(--dim);
+    font-weight: 400; padding: 16px 10px; cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  th:hover { color: var(--accent); }
+  #standings tbody tr:nth-child(even) td { background: var(--surface-2); }
+  #standings tbody tr:hover td { background: #1e1e3e; }
+  td { font-size: 15px; color: #c8c8e0; }
+  .team { font-size: 17px; color: var(--text); line-height: 1.25; }
+  .mgr { color: var(--dim); font-size: 12px; margin-top: 2px; }
+  .pos { color: var(--win); } .neg { color: var(--loss); }
+  .rank { width: 52px; }
+  .rank b {
+    display: inline-block; min-width: 24px; text-align: center; font-weight: 400;
+    font-family: var(--pixel); font-size: 10px; padding: 6px 0;
+    background: var(--border); color: #8a8ab0;
+  }
+  .rank b.top { background: var(--accent); color: var(--bg); }
+  .apct { color: var(--accent); }
+
+  /* luck meter: six blocks either side of a centre line */
+  .luck { display: flex; align-items: center; justify-content: center; gap: 2px; }
+  .luck i { width: 8px; height: 14px; background: var(--border); display: block; }
+  .luck i.on-pos { background: var(--win); }
+  .luck i.on-neg { background: var(--loss); }
+  .luck span { font-size: 13px; margin-left: 8px; min-width: 56px; text-align: right; }
+  th.luck-h, td.luck-c { text-align: center; }
+
+  .grid-wrap { overflow-x: auto; background: var(--surface); padding: 4px; }
+  table.grid td, table.grid th { text-align: center; padding: 5px 4px; white-space: nowrap; }
+  table.grid th { font-family: var(--pixel); font-size: 8px; padding: 10px 4px; cursor: default; }
+  table.grid th:hover { color: var(--dim); }
+  table.grid th.rowhead, table.grid td.rowhead {
+    text-align: left; position: sticky; left: 0; background: #101024;
+    font-family: var(--pixel); font-size: 8px; color: var(--muted);
+    max-width: 132px; overflow: hidden; text-overflow: ellipsis; padding: 5px 8px;
+  }
+  table.grid td { background: #101024; }
+  table.grid td .rec { font-family: var(--pixel); font-size: 9px; line-height: 1.5; }
+  table.grid td.self { background: var(--bg); color: #3a3a5c; font-family: var(--pixel); font-size: 10px; }
+  table.grid td.cell-w { background: rgba(88, 248, 152, .09); }
+  table.grid td.cell-l { background: rgba(248, 88, 88, .09); }
+  .cell-w .rec { color: var(--win); } .cell-l .rec { color: var(--loss); } .cell-e .rec { color: var(--muted); }
+  /* avg margin, ±25 pts full scale, growing from a centre tick */
+  .mbar { display: flex; justify-content: center; margin-top: 5px; }
+  .mbar .l { width: 24px; display: flex; justify-content: flex-end; }
+  .mbar .r { width: 24px; }
+  .mbar .tick { width: 2px; height: 4px; background: #3a3a5c; }
+  .mbar i { height: 4px; display: block; }
+  .mbar .l i { background: var(--loss); }
+  .mbar .r i { background: var(--win); }
+
+  /* by week */
+  #weekly td, #weekly th { text-align: left; }
+  .wbar { display: flex; align-items: center; gap: 10px; }
+  .wbar i { height: 16px; display: block; background: var(--accent); }
+  .wbar b { font-family: var(--pixel); font-size: 10px; font-weight: 400; color: var(--text); }
+  .segs { display: flex; gap: 2px; justify-content: flex-end; }
+  .segs i { width: 6px; height: 14px; background: var(--border); display: block; }
+  .segs i.on { background: var(--win); }
+  td.segs-c { text-align: right; }
+
+  .weeks-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+  .weeks-bar > span { font-family: var(--pixel); font-size: 13px; color: var(--accent); }
+  .chips { display: flex; gap: 4px; flex-wrap: wrap; }
+  .chip {
+    font-family: var(--pixel); font-size: 9px; padding: 9px 10px; border: 0; cursor: pointer;
+    background: var(--surface); color: var(--dim);
+  }
+  .chip:hover { color: var(--text); }
+  .chip.on { background: var(--accent); color: var(--bg); }
+  .wsummary { margin-left: auto; font-size: 14px; color: var(--dim); }
+
+  .legend {
+    color: #8a8aa8; font-size: 13px; line-height: 1.6; margin: 18px 0 0; max-width: 780px;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+  .key { display: flex; gap: 22px; align-items: center; flex-wrap: wrap; margin-top: 16px;
+         font-family: ui-sans-serif, system-ui, sans-serif; font-size: 12px; color: #8a8aa8; }
+  .key span { display: flex; align-items: center; gap: 7px; }
+  .key i { width: 12px; height: 12px; display: block; }
+  .key i.bar { width: 24px; height: 4px; }
+  .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="eyebrow" id="league-sub">ALL-PLAY</div>
+      <h1 id="league-name">ALL PLAY DASHBOARD</h1>
+    </div>
+    <span class="status"><span class="dot" id="dot"></span><span id="status-text">connecting…</span></span>
+  </header>
+
+  <div class="cards" id="cards"></div>
+
+  <div class="tabs">
+    <button class="tab on" data-panel="standings">STANDINGS</button>
+    <button class="tab" data-panel="grid">H2H GRID</button>
+    <button class="tab" data-panel="weeks">BY WEEK</button>
+  </div>
+
+  <div class="panel on" id="panel-standings">
+    <table id="standings">
+      <thead>
+        <tr>
+          <th data-sort="all_play_rank">#</th>
+          <th data-sort="team_name">TEAM</th>
+          <th data-sort="real_pct">REAL</th>
+          <th data-sort="all_play_pct">ALLPLAY</th>
+          <th data-sort="all_play_pct">AP%</th>
+          <th data-sort="luck" class="luck-h">LUCK</th>
+          <th data-sort="avg_points">AVG</th>
+          <th data-sort="best_week">HIGH</th>
+          <th data-sort="worst_week">LOW</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <p class="legend">
+      All play record scores each team against every other team, every week.
+      Luck is real win% minus all play win%. Green blocks right of centre: the
+      schedule has been kind. Red blocks left: this team is losing games it
+      scored well enough to win.
+    </p>
+  </div>
+
+  <div class="panel" id="panel-grid">
+    <div class="grid-wrap"><table class="grid" id="grid"></table></div>
+    <div class="key">
+      <span><i style="background:#58f898"></i>winning record</span>
+      <span><i style="background:#f85858"></i>losing record</span>
+      <span><i class="bar" style="background:#58f898"></i>avg margin, ±25 pts full scale</span>
+    </div>
+    <p class="legend">Row team's record against column team, as if they played every week.</p>
+  </div>
+
+  <div class="panel" id="panel-weeks">
+    <div class="weeks-bar">
+      <span>WEEK</span>
+      <div class="chips" id="week-chips"></div>
+      <span class="wsummary" id="week-summary"></span>
+    </div>
+    <table id="weekly"><thead><tr>
+      <th>#</th><th>TEAM</th><th>POINTS</th><th style="text-align:right">BEAT</th>
+    </tr></thead><tbody></tbody></table>
+    <p class="legend">
+      Right-hand meter: one segment per phantom opponent that week — lit for each
+      team you outscored, dark for each you didn't.
+    </p>
+  </div>
+</div>
+
+<script>
+let DATA = null;
+let sortKey = "all_play_pct";
+let sortDir = -1;
+let selectedWeek = null;
+
+const $ = (s) => document.querySelector(s);
+const pct = (v) => (v * 100).toFixed(1) + "%";
+const signed = (v) => (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%";
+const realPct = (t) => {
+  const g = t.real_wins + t.real_losses + t.real_ties;
+  return g ? (t.real_wins + 0.5 * t.real_ties) / g : 0;
+};
+
+function setStatus(text, cls) {
+  $("#status-text").textContent = text;
+  $("#dot").className = "dot" + (cls ? " " + cls : "");
+}
+
+// Six blocks either side of centre; one block per 4 percentage points of luck,
+// capped at the width of the meter so a blowout still reads as "full".
+function luckMeter(luck) {
+  const n = Math.min(6, Math.round(Math.abs(luck) * 100 / 4));
+  let html = "";
+  for (let i = 6; i >= 1; i--) html += `<i class="${luck < 0 && i <= n ? "on-neg" : ""}"></i>`;
+  for (let i = 1; i <= 6; i++) html += `<i class="${luck > 0 && i <= n ? "on-pos" : ""}"></i>`;
+  return html;
+}
+
+function segMeter(lit, total) {
+  let html = "";
+  for (let i = 0; i < total; i++) html += `<i class="${i < lit ? "on" : ""}"></i>`;
+  return html;
+}
+
+function render(data) {
+  DATA = data;
+  if (data.error) setStatus(data.error, "err");
+
+  const lg = data.league || {};
+  $("#league-name").textContent = (lg.name || "All Play Dashboard").toUpperCase();
+  $("#league-sub").textContent =
+    ["ALL-PLAY", lg.season, lg.total_rosters ? lg.total_rosters + " TEAMS" : null,
+     data.current_week ? "WK " + String(data.current_week).padStart(2, "0") : null]
+    .filter(Boolean).join(" · ");
+
+  if (data.state === "no_games_played" || !(data.teams || []).length) {
+    $("#cards").innerHTML =
+      '<div class="card"><div class="label">STATUS</div>' +
+      '<div class="value">No games played yet</div>' +
+      '<div class="note">The grid fills in once week 1 is in the books.</div></div>';
+    $("#standings").style.display = "none";
+    return;
+  }
+  $("#standings").style.display = "";
+
+  renderCards(data.teams);
+  renderStandings(data.teams);
+  renderGrid(data);
+  renderWeekPicker(data);
+}
+
+function renderCards(teams) {
+  const byLuck = [...teams].sort((a, b) => b.luck - a.luck);
+  const luckiest = byLuck[0], unluckiest = byLuck[byLuck.length - 1];
+  const best = [...teams].sort((a, b) => b.all_play_pct - a.all_play_pct)[0];
+  const scorer = [...teams].sort((a, b) => b.avg_points - a.avg_points)[0];
+
+  const card = (label, value, note) =>
+    `<div class="card"><div class="label">${label}</div>
+     <div class="value">${value}</div><div class="note">${note}</div></div>`;
+
+  $("#cards").innerHTML = [
+    card("STRONGEST ALL-PLAY", esc(best.team_name),
+         `<span class="apct">${best.all_play_wins}-${best.all_play_losses} · ${pct(best.all_play_pct)}</span>`),
+    card("TOP SCORER", esc(scorer.team_name),
+         `<span style="color:var(--warn)">${scorer.avg_points.toFixed(1)} avg pts</span>`),
+    card("LUCKIEST", esc(luckiest.team_name),
+         `<span class="pos">${signed(luckiest.luck)}</span> over earned`),
+    card("UNLUCKIEST", esc(unluckiest.team_name),
+         `<span class="neg">${signed(unluckiest.luck)}</span> under earned`),
+  ].join("");
+}
+
+function renderStandings(teams) {
+  const rows = [...teams].sort((a, b) => {
+    const get = (t) => sortKey === "real_pct" ? realPct(t)
+                     : sortKey === "team_name" ? t.team_name
+                     : t[sortKey];
+    const av = get(a), bv = get(b);
+    if (typeof av === "string") return av.localeCompare(bv) * sortDir;
+    return (av - bv) * sortDir;
+  });
+  const half = Math.ceil(teams.length / 2);
+
+  $("#standings tbody").innerHTML = rows.map((t) => `
+    <tr>
+      <td class="rank"><b class="${t.all_play_rank <= half ? "top" : ""}">${t.all_play_rank}</b></td>
+      <td><div class="team">${esc(t.team_name)}</div><div class="mgr">${esc(t.manager)}</div></td>
+      <td>${t.real_wins}-${t.real_losses}${t.real_ties ? "-" + t.real_ties : ""}</td>
+      <td style="color:var(--text)">${t.all_play_wins}-${t.all_play_losses}</td>
+      <td class="apct">${pct(t.all_play_pct)}</td>
+      <td class="luck-c"><div class="luck">${luckMeter(t.luck)}<span class="${t.luck >= 0 ? "pos" : "neg"}">${signed(t.luck)}</span></div></td>
+      <td>${t.avg_points.toFixed(1)}</td>
+      <td>${t.best_week.toFixed(1)}</td>
+      <td style="color:var(--dim)">${t.worst_week.toFixed(1)}</td>
+    </tr>`).join("");
+}
+
+// Three-letter keys for the grid axes. Names that collide on the first three
+// letters fall back to their word initials, then to a numeric suffix, so every
+// column header stays unique.
+function abbrMap(teams) {
+  const out = {}, used = {};
+  const clean = (n) => String(n).replace(/[^A-Za-z ]/g, "").trim();
+  for (const t of teams) {
+    const c = clean(t.team_name);
+    const initials = c.split(/\s+/).map((w) => w[0] || "").join("").slice(0, 3);
+    const first = c.replace(/ /g, "").slice(0, 3);
+    let key = (first || initials || "?").toUpperCase();
+    if (used[key] && initials.length >= 2) key = initials.toUpperCase();
+    let n = 2;
+    while (used[key]) key = (key.slice(0, 2) + n++).toUpperCase();
+    used[key] = true;
+    out[t.roster_id] = key;
+  }
+  return out;
+}
+
+function renderGrid(data) {
+  const teams = data.teams, grid = data.grid || {};
+  const abbr = abbrMap(teams);
+
+  let html = "<thead><tr><th class='rowhead'></th>" +
+    teams.map((t) => `<th title="${esc(t.team_name)}">${esc(abbr[t.roster_id])}</th>`).join("") +
+    "</tr></thead><tbody>";
+
+  for (const a of teams) {
+    html += `<tr><td class="rowhead" title="${esc(a.team_name)}">${esc(abbr[a.roster_id])} ${a.all_play_rank}</td>`;
+    for (const b of teams) {
+      if (a.roster_id === b.roster_id) { html += '<td class="self">×</td>'; continue; }
+      const c = (grid[a.roster_id] || {})[b.roster_id];
+      if (!c) { html += '<td class="cell-e"><div class="rec">·</div></td>'; continue; }
+      const cls = c.wins > c.losses ? "cell-w" : c.wins < c.losses ? "cell-l" : "cell-e";
+      const m = Number(c.avg_margin) || 0;
+      const w = Math.min(24, Math.round(Math.abs(m) / 25 * 24));
+      html += `<td class="${cls}" title="avg margin ${m > 0 ? "+" : ""}${m}">` +
+              `<div class="rec">${c.wins}-${c.losses}</div>` +
+              `<div class="mbar"><span class="l"><i style="width:${m < 0 ? w : 0}px"></i></span>` +
+              `<span class="tick"></span>` +
+              `<span class="r"><i style="width:${m > 0 ? w : 0}px"></i></span></div></td>`;
+    }
+    html += "</tr>";
+  }
+  $("#grid").innerHTML = html + "</tbody>";
+}
+
+function renderWeekPicker(data) {
+  const weeks = data.weeks_available || [];
+  if (!weeks.length) { $("#week-chips").innerHTML = ""; return; }
+  if (!weeks.includes(selectedWeek)) selectedWeek = weeks[weeks.length - 1];
+
+  $("#week-chips").innerHTML = weeks.map((w) =>
+    `<button class="chip${w === selectedWeek ? " on" : ""}" data-week="${w}">${w}</button>`).join("");
+  renderWeek(selectedWeek);
+}
+
+function renderWeek(week) {
+  if (!DATA) return;
+  selectedWeek = week;
+  document.querySelectorAll(".chip").forEach((c) => {
+    c.classList.toggle("on", +c.dataset.week === week);
+  });
+
+  const scores = (DATA.weekly_scores || {})[week] || (DATA.weekly_scores || {})[String(week)] || {};
+  const names = {};
+  DATA.teams.forEach((t) => (names[t.roster_id] = t.team_name));
+
+  const rows = Object.entries(scores)
+    .map(([rid, pts]) => ({ rid, name: names[rid] || "Roster " + rid, pts }))
+    .sort((a, b) => b.pts - a.pts);
+
+  if (!rows.length) {
+    $("#weekly tbody").innerHTML = '<tr><td colspan="4" class="empty">No scores for this week yet.</td></tr>';
+    $("#week-summary").textContent = "";
+    return;
+  }
+
+  const max = rows[0].pts;
+  const mid = rows.length % 2
+    ? rows[(rows.length - 1) / 2].pts
+    : (rows[rows.length / 2 - 1].pts + rows[rows.length / 2].pts) / 2;
+  $("#week-summary").textContent =
+    `high ${max.toFixed(1)} · low ${rows[rows.length - 1].pts.toFixed(1)} · median ${mid.toFixed(1)}`;
+
+  $("#weekly tbody").innerHTML = rows.map((r, i) => {
+    const beat = rows.filter((o) => o.pts < r.pts).length;
+    const w = max ? Math.round(r.pts / max * 100) : 0;
+    const color = i < rows.length / 3 ? "var(--win)"
+                : i < rows.length * 2 / 3 ? "var(--accent)" : "var(--loss)";
+    return `<tr>
+      <td class="rank" style="width:44px;font-family:var(--pixel);font-size:9px;color:var(--dim)">${i + 1}</td>
+      <td class="team" style="width:268px">${esc(r.name)}</td>
+      <td><div class="wbar"><i style="width:${w}%;background:${color}"></i><b>${r.pts.toFixed(1)}</b></div></td>
+      <td class="segs-c"><div class="segs">${segMeter(beat, rows.length - 1)}</div></td>
+    </tr>`;
+  }).join("");
+}
+
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+document.querySelectorAll(".tab").forEach((tab) => {
+  tab.onclick = () => {
+    document.querySelectorAll(".tab").forEach((t) => t.classList.remove("on"));
+    document.querySelectorAll(".panel").forEach((p) => p.classList.remove("on"));
+    tab.classList.add("on");
+    $("#panel-" + tab.dataset.panel).classList.add("on");
+  };
+});
+
+document.querySelectorAll("#standings th[data-sort]").forEach((th) => {
+  th.onclick = () => {
+    const key = th.dataset.sort;
+    sortDir = key === sortKey ? -sortDir : (key === "team_name" ? 1 : -1);
+    sortKey = key;
+    if (DATA) renderStandings(DATA.teams);
+  };
+});
+
+$("#week-chips").onclick = (e) => {
+  const chip = e.target.closest(".chip");
+  if (chip) renderWeek(+chip.dataset.week);
+};
+
+// Live updates. SSE reconnects on its own; the fetch is just for first paint
+// in case the stream is slow to deliver its opening frame.
+fetch("/api/allplay").then((r) => r.json()).then(render).catch(() => {});
+
+const es = new EventSource("/api/stream");
+es.addEventListener("update", (e) => {
+  render(JSON.parse(e.data));
+  const t = new Date().toLocaleTimeString();
+  setStatus("updated " + t, null);
+});
+es.onerror = () => setStatus("reconnecting…", "stale");
+es.onopen = () => setStatus("live", null);
+</script>
+</body>
+</html>

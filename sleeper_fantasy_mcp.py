@@ -20,6 +20,11 @@ try:
 except ImportError:
     from fastmcp import FastMCP
 
+# Shared core (ADR 001). This module is now an adapter over sleeper/*.
+from sleeper import client as core_client
+from sleeper import league as core_league
+from sleeper import render
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Server initialization
 # ─────────────────────────────────────────────────────────────────────────────
@@ -93,11 +98,10 @@ STADIUM_INFO: Dict[str, Dict[str, Any]] = {
     "WAS": {"lat": 38.9077, "lon": -76.8645,  "indoor": False, "name": "Northwest Stadium"},
 }
 
-# Module-level caches — avoid re-fetching large / repeated payloads
-_players_cache: Optional[Dict[str, Any]] = None
-_user_id_cache: Optional[str] = None
-_league_cache: Optional[Dict[str, Any]] = None
-_nfl_state_cache: Optional[Dict[str, Any]] = None
+# Players, user_id, league, and NFL state are now cached by sleeper/cache.py
+# with per data class TTLs (ADR 001). The caches below are still local because
+# their consumers have not been migrated to the core yet; they are bounded by
+# the lifetime of a single stdio session, which is acceptable for this adapter.
 _weekly_stats_cache: Dict[tuple, Dict[str, Any]] = {}
 _season_stats_cache: Dict[str, Dict[str, Any]] = {}
 _weekly_proj_cache: Dict[tuple, Dict[str, Any]] = {}
@@ -108,224 +112,38 @@ _schedule_cache: Dict[str, Dict[str, Any]] = {}
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Direct stat-field multipliers (Sleeper stat key → points per unit)
-SCORING_RULES: Dict[str, float] = {
-    # Passing
-    "pass_yd": 0.04,
-    "pass_td": 6.0,
-    "pass_int": -2.0,
-    "pass_2pt": 2.0,
-    "pass_cmp_40p": 1.0,   # per 40+ yd completion
-    "pass_td_40p": 1.0,    # per 40+ yd pass TD bonus
-    "pass_td_50p": 1.0,    # per 50+ yd pass TD (stacks with 40+ bonus)
-    # Rushing
-    "rush_yd": 0.1,
-    "rush_td": 6.0,
-    "rush_2pt": 2.0,
-    "rush_att": 0.2,
-    "rush_40p": 1.0,       # per 40+ yd rush
-    "rush_td_40p": 1.0,    # per 40+ yd rush TD bonus
-    "rush_td_50p": 1.0,    # per 50+ yd rush TD (stacks with 40+ bonus)
-    # Receiving (Full PPR)
-    "rec": 1.0,
-    "rec_yd": 0.1,
-    "rec_td": 6.0,
-    "rec_2pt": 2.0,
-    "rec_40p": 1.0,        # per 40+ yd reception
-    "rec_td_40p": 1.0,     # per 40+ yd rec TD bonus
-    "rec_td_50p": 1.0,     # per 50+ yd rec TD (stacks with 40+ bonus)
-    # Miscellaneous
-    "fum_lost": -2.0,
-    "fum_rec_td": 6.0,
-    # Kicking (FG ranges handled in FG_SCORING below)
-    "xpm": 1.0,
-    "xpmiss": -1.0,
-    "fgmiss": -1.0,
-    # Milestone game bonuses — Sleeper may return these directly
-    "rush_yd_100_199": 1.0,    # +1 for 100-199 rush game
-    "rush_yd_200p": 1.0,       # +1 more for 200+ rush game (cumulative: 2 total)
-    "rec_yd_100_199": 1.0,     # +1 for 100-199 rec game
-    "rec_yd_200p": 1.0,        # +1 more for 200+ rec game
-    "pass_yd_300_399": 1.0,    # +1 for 300-399 pass game
-    "pass_yd_400p": 2.0,       # +2 for 400+ pass game (cumulative: 3 total with 300 bonus)
-    "rush_rec_yd_200p": 1.0,   # +1 for 200+ combined rush+rec
-    "pass_cmp_25p": 1.0,       # +1 for 25+ completions
-}
+# Scoring now lives in sleeper/scoring.py (ADR 001). Re-exported here so any
+# existing reference inside this module keeps working unchanged.
+from sleeper.scoring import (  # noqa: E402
+    SCORING_RULES,
+    FG_SCORING,
+    DEF_SCORING,
+    DEF_PA_TIERS,
+    DEF_YA_TIERS,
+    calculate_fantasy_points,
+    _calculate_def_points,
+    _derive_milestone_bonuses,
+)
 
-FG_SCORING: Dict[str, float] = {
-    "fgm_0_19": 3.0,
-    "fgm_20_29": 3.0,
-    "fgm_30_39": 3.0,
-    "fgm_40_49": 4.0,
-    "fgm_50p": 5.0,
-}
-
-DEF_SCORING: Dict[str, float] = {
-    "def_td": 6.0,
-    "sack": 1.0,
-    "def_int": 2.0,
-    "def_fum_rec": 2.0,
-    "safe": 2.0,
-    "def_ff": 1.0,
-    "blk_kick": 2.0,
-    "def_4dstop": 1.0,
-}
-
-# Points-allowed tiers: (min, max, fantasy pts)
-DEF_PA_TIERS = [
-    (0,   0,   7.0),
-    (1,   6,   6.0),
-    (7,   13,  5.0),
-    (14,  20,  2.0),
-    (21,  27,  0.0),
-    (28,  34, -1.0),
-    (35, 9999, -4.0),
-]
-
-# Yards-allowed tiers: (min, max, fantasy pts)
-DEF_YA_TIERS = [
-    (0,    99,   5.0),
-    (100,  199,  3.0),
-    (200,  299,  2.0),
-    (300,  349,  1.0),
-    (350,  399,  0.0),
-    (400,  449, -1.0),
-    (450,  499, -3.0),
-    (500,  549, -5.0),
-    (550, 9999, -6.0),
-]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Scoring calculator
-# ─────────────────────────────────────────────────────────────────────────────
-
-def calculate_fantasy_points(stats: Dict[str, Any], position: str) -> float:
-    """
-    Calculate fantasy points for a player given a stats or projections dict.
-
-    Works for both season aggregate stats and single-week projections.
-    For projections, milestone bonus fields (e.g. rush_yd_100_199) may be
-    fractional expected-value numbers — the multiplier still applies correctly.
-    """
-    if not stats:
-        return 0.0
-
-    if position == "DEF":
-        return _calculate_def_points(stats)
-
-    pts = 0.0
-
-    # Direct multiplier fields
-    for field, mult in SCORING_RULES.items():
-        pts += stats.get(field, 0.0) * mult
-
-    # FG range scoring
-    for field, value in FG_SCORING.items():
-        pts += stats.get(field, 0.0) * value
-
-    # If Sleeper didn't return the milestone bonus fields, derive them from raw totals.
-    # This is the correct approach for single-week projections.
-    has_bonus_fields = any(
-        field in stats for field in ("rush_yd_100_199", "rec_yd_100_199", "pass_yd_300_399")
-    )
-    if not has_bonus_fields:
-        pts += _derive_milestone_bonuses(stats)
-
-    return round(pts, 2)
-
-
-def _calculate_def_points(stats: Dict[str, Any]) -> float:
-    pts = 0.0
-
-    for field, value in DEF_SCORING.items():
-        pts += stats.get(field, 0.0) * value
-
-    # Points allowed — prefer the aggregate field; fall back to bucket flags
-    pa = stats.get("pts_allow")
-    if pa is not None:
-        for lo, hi, bonus in DEF_PA_TIERS:
-            if lo <= pa <= hi:
-                pts += bonus
-                break
-    else:
-        bucket_map = {
-            "pts_allow_0":    7.0,
-            "pts_allow_1_6":  6.0,
-            "pts_allow_7_13": 5.0,
-            "pts_allow_14_20": 2.0,
-            "pts_allow_28_34": -1.0,
-            "pts_allow_35p":  -4.0,
-        }
-        for field, bonus in bucket_map.items():
-            if stats.get(field, 0):
-                pts += bonus
-                break
-
-    # Yards allowed
-    ya = stats.get("yds_allow")
-    if ya is not None:
-        for lo, hi, bonus in DEF_YA_TIERS:
-            if lo <= ya <= hi:
-                pts += bonus
-                break
-
-    return round(pts, 2)
-
-
-def _derive_milestone_bonuses(stats: Dict[str, Any]) -> float:
-    """
-    Compute milestone game bonuses from raw totals when Sleeper's pre-computed
-    bonus fields are absent (common for weekly projections).
-    """
-    pts = 0.0
-    rush_yd = stats.get("rush_yd", 0.0)
-    rec_yd = stats.get("rec_yd", 0.0)
-    pass_yd = stats.get("pass_yd", 0.0)
-    pass_cmp = stats.get("pass_cmp", 0.0)
-
-    if rush_yd >= 100:
-        pts += 1.0   # 100-199 rush bonus
-    if rush_yd >= 200:
-        pts += 1.0   # 200+ rush bonus (cumulative)
-    if rec_yd >= 100:
-        pts += 1.0   # 100-199 rec bonus
-    if rec_yd >= 200:
-        pts += 1.0   # 200+ rec bonus (cumulative)
-    if pass_yd >= 300:
-        pts += 1.0   # 300-399 pass bonus
-    if pass_yd >= 400:
-        pts += 2.0   # 400+ pass bonus (cumulative; extra 2, total 3 from 300)
-    if (rush_yd + rec_yd) >= 200:
-        pts += 1.0   # 200+ combined rush+rec
-    if pass_cmp >= 25:
-        pts += 1.0   # 25+ completions
-
-    return pts
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared API helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def _get(endpoint: str, params: Optional[Union[Dict, List]] = None) -> Any:
-    """Perform a single GET request against the Sleeper API."""
-    url = f"{API_BASE}{endpoint}"
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.get(url, params=params)
-        resp.raise_for_status()
-        return resp.json()
+    """
+    GET against the Sleeper API via the shared pooled client (ADR 001).
+
+    Previously opened a brand new AsyncClient per request, so no connection was
+    ever reused. Now goes through sleeper.client, which adds pooling, retry with
+    backoff, and a rate limit guard.
+    """
+    return await core_client.sleeper_get(endpoint, params)
 
 
 def _handle_error(exc: Exception) -> str:
-    """Return a user-friendly error string from any exception."""
-    if isinstance(exc, httpx.HTTPStatusError):
-        code = exc.response.status_code
-        if code == 404:
-            return "Error: Not found — check that the username or league ID is correct."
-        if code == 429:
-            return "Error: Sleeper API rate limit hit. Wait a moment and retry."
-        return f"Error: Sleeper API returned HTTP {code}."
-    if isinstance(exc, httpx.TimeoutException):
-        return "Error: Request timed out — the Sleeper API may be slow. Retry in a moment."
-    return f"Error: {type(exc).__name__}: {exc}"
+    """User friendly error string. Shared with the dashboard via sleeper.client."""
+    return core_client.describe_error(exc)
 
 
 def _sleeper_to_espn_abbr(team: str) -> str:
@@ -490,42 +308,29 @@ def _weather_fantasy_note(weather: Dict[str, Any]) -> str:
 
 
 async def _get_players() -> Dict[str, Any]:
-    """Fetch (and session-cache) the full Sleeper NFL players dictionary (~10 MB)."""
-    global _players_cache
-    if _players_cache is None:
-        _players_cache = await _get("/players/nfl")
-    return _players_cache
+    """
+    Full Sleeper NFL player map (~5 MB), via the shared core.
+
+    The core caches this in memory and on disk with a 24 hour TTL, matching
+    Sleeper's documented guidance to fetch it at most once per day. Previously
+    this was an unbounded module global refetched on every process start.
+    """
+    return await core_league.get_players()
 
 
 async def _get_user_id() -> str:
-    """Fetch (and session-cache) GronkQuixote's Sleeper user_id."""
-    global _user_id_cache
-    if _user_id_cache is None:
-        data = await _get(f"/user/{SLEEPER_USERNAME}")
-        _user_id_cache = data["user_id"]
-    return _user_id_cache
+    """Resolve the configured Sleeper user_id, via the shared core."""
+    return await core_league.get_user_id()
 
 
 async def _get_league() -> Dict[str, Any]:
     """
-    Fetch (and session-cache) The Chrysoloras Gang league object.
-    Matches by name; falls back to first league if the name isn't found.
+    Resolve the league object, via the shared core.
+
+    Identity is configurable now (SLEEPER_LEAGUE_ID / SLEEPER_LEAGUE_MATCH)
+    rather than a hardcoded name match, per ADR 001 action item 12.
     """
-    global _league_cache
-    if _league_cache is None:
-        user_id = await _get_user_id()
-        leagues = await _get(f"/user/{user_id}/leagues/nfl/{CURRENT_SEASON}")
-        if not leagues:
-            raise ValueError(
-                f"No leagues found for {SLEEPER_USERNAME} in {CURRENT_SEASON}. "
-                "Ensure the account has a league for this season."
-            )
-        league = next(
-            (lg for lg in leagues if "chrysoloras" in lg.get("name", "").lower()),
-            leagues[0],
-        )
-        _league_cache = league
-    return _league_cache
+    return await core_league.get_league()
 
 
 async def _get_taken_player_ids(league_id: str) -> set:
@@ -541,14 +346,19 @@ async def _get_taken_player_ids(league_id: str) -> set:
 
 async def _get_current_week() -> tuple:
     """
-    Return (season_type, week, season) from Sleeper's /state/nfl, cached for the session.
-    season_type is one of 'pre', 'regular', 'post'.
+    Return (season_type, week, season) from Sleeper's /state/nfl.
+
+    Now on a 5 minute TTL via the core rather than cached forever. The old
+    infinite cache meant a long lived process would believe it was still week 1
+    in December, which is harmless for a short stdio session and a real bug for
+    the dashboard.
     """
-    global _nfl_state_cache
-    if _nfl_state_cache is None:
-        _nfl_state_cache = await _get("/state/nfl")
-    s = _nfl_state_cache
-    return s.get("season_type", "regular"), s.get("display_week", 1), s.get("league_season", CURRENT_SEASON)
+    s = await core_league.get_nfl_state()
+    return (
+        s.get("season_type", "regular"),
+        s.get("display_week", 1),
+        s.get("league_season", CURRENT_SEASON),
+    )
 
 
 async def _fetch_projections_for_week(season: str, week: int, positions: List[str]) -> Dict[str, Dict]:
@@ -2315,6 +2125,230 @@ async def sleeper_get_draft_best_available(params: GetDraftBestAvailableInput) -
 async def _parallel_fetch(*coroutines):
     """Run multiple coroutines concurrently and return results in order."""
     return await asyncio.gather(*coroutines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# All play tools — same core the dashboard uses (ADR 001)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool(
+    name="sleeper_get_all_play_standings",
+    description=(
+        "Show all play standings: how every team would fare if it played every "
+        "other team every week, instead of just its scheduled opponent. Reveals "
+        "which teams are winning on schedule luck and which are genuinely good. "
+        "Use for 'who is actually the best team', 'am I unlucky', 'power rankings'."
+    ),
+)
+async def sleeper_get_all_play_standings() -> str:
+    """
+    All play standings with a luck column.
+
+    All play record is each team scored against all 11 other teams each week.
+    The gap between real record and all play record is schedule luck.
+
+    Returns:
+        str: Markdown table of rank, real record, all play record, all play
+             percentage, luck, and average points, sorted by all play strength.
+
+    Example prompts:
+        - "Who's actually the best team in the league?"
+        - "Have I been unlucky this season?"
+        - "Show me the all play standings"
+    """
+    try:
+        payload = await core_league.build_dashboard_payload()
+        return render.all_play_table(payload)
+    except Exception as exc:
+        return _handle_error(exc)
+
+
+@mcp.tool(
+    name="sleeper_get_head_to_head_grid",
+    description=(
+        "Show the everyone vs everyone matrix: each team's record against each "
+        "other team across every week of the season. Use for 'who owns who', "
+        "'head to head grid', 'who matches up well against me'."
+    ),
+)
+async def sleeper_get_head_to_head_grid() -> str:
+    """
+    Everyone vs everyone head to head matrix.
+
+    Returns:
+        str: Markdown matrix where each cell is the row team's record against
+             the column team, computed as if they played every single week.
+
+    Example prompts:
+        - "Show me the head to head grid"
+        - "Which teams do I beat most often?"
+    """
+    try:
+        payload = await core_league.build_dashboard_payload()
+        return render.head_to_head_matrix(payload)
+    except Exception as exc:
+        return _handle_error(exc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Configuration tools — change username / league at runtime
+# ─────────────────────────────────────────────────────────────────────────────
+
+from sleeper import config as sleeper_config  # noqa: E402 (used only in tools below)
+
+
+@mcp.resource("sleeper://setup")
+def sleeper_setup_guide() -> str:
+    """Startup guide — instructs the user to configure identity before use."""
+    configured = bool(sleeper_config.SLEEPER_USERNAME and
+                      (sleeper_config.LEAGUE_ID or sleeper_config.LEAGUE_NAME_MATCH))
+    if configured:
+        return (
+            f"Sleeper MCP is ready.\n"
+            f"Username: {sleeper_config.SLEEPER_USERNAME}\n"
+            f"League: {sleeper_config.LEAGUE_ID or sleeper_config.LEAGUE_NAME_MATCH}"
+        )
+    return (
+        "Welcome to Sleeper Fantasy MCP!\n\n"
+        "Before using any tools, please configure your identity:\n\n"
+        "1. Set your username:\n"
+        "   > Call sleeper_set_username with your Sleeper display name.\n\n"
+        "2. Set your league:\n"
+        "   > Call sleeper_set_league with your league name or league ID.\n\n"
+        "You only need to do this once per session. "
+        "Use environment variables SLEEPER_USERNAME and SLEEPER_LEAGUE_MATCH "
+        "to pre-configure across sessions."
+    )
+
+
+@mcp.tool(
+    name="sleeper_get_config",
+    annotations={
+        "title": "Get Active Sleeper Configuration",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+)
+async def sleeper_get_config() -> str:
+    """Show the active Sleeper username and league identity settings.
+
+    Returns the username, league name match fragment, and pinned league ID
+    (if any) that the server is currently using.
+
+    Example prompts:
+        - "What username is the Sleeper MCP using?"
+        - "Which league am I connected to?"
+        - "Show current Sleeper config"
+    """
+    lines = [
+        "## Active Sleeper Configuration",
+        f"- **Username:** {sleeper_config.SLEEPER_USERNAME}",
+        f"- **League name match:** `{sleeper_config.LEAGUE_NAME_MATCH}`",
+        f"- **Pinned league ID:** {sleeper_config.LEAGUE_ID or '*(none — using name match)*'}",
+        f"- **Season:** {sleeper_config.CURRENT_SEASON}",
+    ]
+    return "\n".join(lines)
+
+
+@mcp.tool(
+    name="sleeper_set_username",
+    annotations={
+        "title": "Set Sleeper Username",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+async def sleeper_set_username(username: str) -> str:
+    """Change the active Sleeper username used by all tools.
+
+    Updates the username and clears cached user/league data so the next
+    tool call resolves fresh data for the new user.
+
+    Args:
+        username: Sleeper display name (case sensitive).
+
+    Returns:
+        str: Confirmation message.
+
+    Example prompts:
+        - "Switch to username JohnDoe"
+        - "Change the Sleeper user to TDMachine99"
+    """
+    sleeper_config.set_username(username)
+    # Invalidate cached identity so subsequent calls re-resolve for the new user.
+    from sleeper import cache as sleeper_cache
+    for prefix in ("user_id:", "league:"):
+        for key in list(sleeper_cache.memory._data.keys()):
+            if key.startswith(prefix):
+                sleeper_cache.memory.invalidate(key)
+    return f"Username updated to **{username}**. League cache cleared."
+
+
+@mcp.tool(
+    name="sleeper_set_league",
+    annotations={
+        "title": "Set Fantasy League",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+async def sleeper_set_league(
+    league_name: Optional[str] = None,
+    league_id: Optional[str] = None,
+) -> str:
+    """Change the active fantasy league used by all tools.
+
+    Provide either a league_name fragment (matched case-insensitively against
+    the user's leagues) or an exact league_id. If both are given, league_id
+    takes precedence.
+
+    Args:
+        league_name: Partial or full league name to match (e.g. "chrysoloras").
+        league_id:   Exact Sleeper league ID (overrides name matching).
+
+    Returns:
+        str: Confirmation with the resolved league name and ID.
+
+    Example prompts:
+        - "Switch to my league called Dynasty Kings"
+        - "Set the league to ID 1234567890"
+    """
+    if not league_name and not league_id:
+        return "Provide at least one of `league_name` or `league_id`."
+
+    if league_id:
+        sleeper_config.set_league_id(league_id)
+    else:
+        sleeper_config.set_league_match(league_name)  # type: ignore[arg-type]
+
+    # Clear cached league so the next call re-resolves under the new identity.
+    from sleeper import cache as sleeper_cache
+    for key in list(sleeper_cache.memory._data.keys()):
+        if key.startswith("league:"):
+            sleeper_cache.memory.invalidate(key)
+
+    if league_id:
+        try:
+            league = await core_league.get_league()
+            name = league.get("name", league_id)
+            return f"League updated to **{name}** (ID: `{league_id}`)."
+        except Exception as exc:
+            return f"League ID set to `{league_id}` but could not verify: {_handle_error(exc)}"
+    else:
+        try:
+            league = await core_league.get_league()
+            name = league.get("name", "?")
+            lid = league.get("league_id", "?")
+            return f"League updated to **{name}** (ID: `{lid}`)."
+        except Exception as exc:
+            return f"League match set to `{league_name}` but could not verify: {_handle_error(exc)}"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
