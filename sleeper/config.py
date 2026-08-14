@@ -6,15 +6,16 @@ provided via environment variables or set at runtime via the MCP config tools
 (sleeper_set_username / sleeper_set_league) before any league-aware tool works.
 """
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 
 # ── Identity ────────────────────────────────────────────────────────────────
-# Empty string = not yet configured. Tools guard against this.
-SLEEPER_USERNAME: str = os.getenv("SLEEPER_USERNAME", "")
+SLEEPER_USERNAME: str = os.getenv("SLEEPER_USERNAME", "GronkQuixote")
 
 # Name fragment used to pick the right league when a user has several.
-LEAGUE_NAME_MATCH: str = os.getenv("SLEEPER_LEAGUE_MATCH", "")
+LEAGUE_NAME_MATCH: str = os.getenv("SLEEPER_LEAGUE_MATCH", "chrysoloras")
 
 # Set this to pin a specific league and skip name matching entirely.
 LEAGUE_ID: str | None = os.getenv("SLEEPER_LEAGUE_ID") or None
