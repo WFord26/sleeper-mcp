@@ -1,0 +1,910 @@
+{
+  "cell": 10,
+  "grid": 8,
+  "pad": 1,
+  "sheet": {
+    "file": "sprite-sheet.png",
+    "scale": 12,
+    "frameSize": 120,
+    "cols": 8,
+    "rows": 4
+  },
+  "teams": [
+    {
+      "abbr": "BUF",
+      "city": "Buffalo",
+      "conference": "AFC",
+      "division": "EAST",
+      "primary": "#00338d",
+      "secondary": "#c60c30",
+      "glyph": "chevron",
+      "bitmap": [
+        "00000000",
+        "11000011",
+        "11100111",
+        "01111110",
+        "00111100",
+        "00011000",
+        "00000000",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/buf.png",
+      "png120": "assets/badges/120/buf.png",
+      "glyphPng": "assets/badges/glyph-120/buf.png",
+      "sprite": {
+        "x": 0,
+        "y": 0,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "MIA",
+      "city": "Miami",
+      "conference": "AFC",
+      "division": "EAST",
+      "primary": "#008e97",
+      "secondary": "#fc4c02",
+      "glyph": "wave",
+      "bitmap": [
+        "00000000",
+        "11000011",
+        "01100110",
+        "00111100",
+        "00000000",
+        "11000011",
+        "01100110",
+        "00111100"
+      ],
+      "png40": "assets/badges/40/mia.png",
+      "png120": "assets/badges/120/mia.png",
+      "glyphPng": "assets/badges/glyph-120/mia.png",
+      "sprite": {
+        "x": 120,
+        "y": 0,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "NE",
+      "city": "New England",
+      "conference": "AFC",
+      "division": "EAST",
+      "primary": "#002a5c",
+      "secondary": "#c60c30",
+      "glyph": "tri",
+      "bitmap": [
+        "00000000",
+        "00011000",
+        "00111100",
+        "01111110",
+        "11111111",
+        "11111111",
+        "00000000",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/ne.png",
+      "png120": "assets/badges/120/ne.png",
+      "glyphPng": "assets/badges/glyph-120/ne.png",
+      "sprite": {
+        "x": 240,
+        "y": 0,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "NYJ",
+      "city": "New York Jets",
+      "conference": "AFC",
+      "division": "EAST",
+      "primary": "#115740",
+      "secondary": "#f2f2f2",
+      "glyph": "arrow",
+      "bitmap": [
+        "00011000",
+        "00111100",
+        "01111110",
+        "11111111",
+        "00111100",
+        "00111100",
+        "00111100",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/nyj.png",
+      "png120": "assets/badges/120/nyj.png",
+      "glyphPng": "assets/badges/glyph-120/nyj.png",
+      "sprite": {
+        "x": 360,
+        "y": 0,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "BAL",
+      "city": "Baltimore",
+      "conference": "AFC",
+      "division": "NORTH",
+      "primary": "#241773",
+      "secondary": "#9e7c0c",
+      "glyph": "diamond",
+      "bitmap": [
+        "00011000",
+        "00111100",
+        "01111110",
+        "11111111",
+        "11111111",
+        "01111110",
+        "00111100",
+        "00011000"
+      ],
+      "png40": "assets/badges/40/bal.png",
+      "png120": "assets/badges/120/bal.png",
+      "glyphPng": "assets/badges/glyph-120/bal.png",
+      "sprite": {
+        "x": 480,
+        "y": 0,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "CIN",
+      "city": "Cincinnati",
+      "conference": "AFC",
+      "division": "NORTH",
+      "primary": "#fb4f14",
+      "secondary": "#101820",
+      "glyph": "bars",
+      "bitmap": [
+        "00000000",
+        "00000011",
+        "00000011",
+        "00011011",
+        "00011011",
+        "11011011",
+        "11011011",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/cin.png",
+      "png120": "assets/badges/120/cin.png",
+      "glyphPng": "assets/badges/glyph-120/cin.png",
+      "sprite": {
+        "x": 600,
+        "y": 0,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "CLE",
+      "city": "Cleveland",
+      "conference": "AFC",
+      "division": "NORTH",
+      "primary": "#ff3c00",
+      "secondary": "#311d00",
+      "glyph": "shield",
+      "bitmap": [
+        "01111110",
+        "11111111",
+        "11111111",
+        "11111111",
+        "01111110",
+        "00111100",
+        "00011000",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/cle.png",
+      "png120": "assets/badges/120/cle.png",
+      "glyphPng": "assets/badges/glyph-120/cle.png",
+      "sprite": {
+        "x": 720,
+        "y": 0,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "PIT",
+      "city": "Pittsburgh",
+      "conference": "AFC",
+      "division": "NORTH",
+      "primary": "#ffb612",
+      "secondary": "#101820",
+      "glyph": "grid",
+      "bitmap": [
+        "11111111",
+        "10000001",
+        "10111101",
+        "10100101",
+        "10100101",
+        "10111101",
+        "10000001",
+        "11111111"
+      ],
+      "png40": "assets/badges/40/pit.png",
+      "png120": "assets/badges/120/pit.png",
+      "glyphPng": "assets/badges/glyph-120/pit.png",
+      "sprite": {
+        "x": 840,
+        "y": 0,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "HOU",
+      "city": "Houston",
+      "conference": "AFC",
+      "division": "SOUTH",
+      "primary": "#03202f",
+      "secondary": "#a71930",
+      "glyph": "star",
+      "bitmap": [
+        "00011000",
+        "00011000",
+        "01111110",
+        "11111111",
+        "01111110",
+        "00111100",
+        "01100110",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/hou.png",
+      "png120": "assets/badges/120/hou.png",
+      "glyphPng": "assets/badges/glyph-120/hou.png",
+      "sprite": {
+        "x": 0,
+        "y": 120,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "IND",
+      "city": "Indianapolis",
+      "conference": "AFC",
+      "division": "SOUTH",
+      "primary": "#002c5f",
+      "secondary": "#f2f2f2",
+      "glyph": "peak",
+      "bitmap": [
+        "00000000",
+        "00011000",
+        "00111100",
+        "01100110",
+        "11000011",
+        "00000000",
+        "11111111",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/ind.png",
+      "png120": "assets/badges/120/ind.png",
+      "glyphPng": "assets/badges/glyph-120/ind.png",
+      "sprite": {
+        "x": 120,
+        "y": 120,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "JAX",
+      "city": "Jacksonville",
+      "conference": "AFC",
+      "division": "SOUTH",
+      "primary": "#006778",
+      "secondary": "#d7a22a",
+      "glyph": "eye",
+      "bitmap": [
+        "00000000",
+        "00111100",
+        "01111110",
+        "11011011",
+        "11011011",
+        "01111110",
+        "00111100",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/jax.png",
+      "png120": "assets/badges/120/jax.png",
+      "glyphPng": "assets/badges/glyph-120/jax.png",
+      "sprite": {
+        "x": 240,
+        "y": 120,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "TEN",
+      "city": "Tennessee",
+      "conference": "AFC",
+      "division": "SOUTH",
+      "primary": "#0c2340",
+      "secondary": "#4b92db",
+      "glyph": "pennant",
+      "bitmap": [
+        "11000000",
+        "11111100",
+        "11111110",
+        "11111100",
+        "11000000",
+        "11000000",
+        "11000000",
+        "11000000"
+      ],
+      "png40": "assets/badges/40/ten.png",
+      "png120": "assets/badges/120/ten.png",
+      "glyphPng": "assets/badges/glyph-120/ten.png",
+      "sprite": {
+        "x": 360,
+        "y": 120,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "DEN",
+      "city": "Denver",
+      "conference": "AFC",
+      "division": "WEST",
+      "primary": "#fb4f14",
+      "secondary": "#002244",
+      "glyph": "peak",
+      "bitmap": [
+        "00000000",
+        "00011000",
+        "00111100",
+        "01100110",
+        "11000011",
+        "00000000",
+        "11111111",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/den.png",
+      "png120": "assets/badges/120/den.png",
+      "glyphPng": "assets/badges/glyph-120/den.png",
+      "sprite": {
+        "x": 480,
+        "y": 120,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "KC",
+      "city": "Kansas City",
+      "conference": "AFC",
+      "division": "WEST",
+      "primary": "#e31837",
+      "secondary": "#ffb81c",
+      "glyph": "arrow",
+      "bitmap": [
+        "00011000",
+        "00111100",
+        "01111110",
+        "11111111",
+        "00111100",
+        "00111100",
+        "00111100",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/kc.png",
+      "png120": "assets/badges/120/kc.png",
+      "glyphPng": "assets/badges/glyph-120/kc.png",
+      "sprite": {
+        "x": 600,
+        "y": 120,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "LV",
+      "city": "Las Vegas",
+      "conference": "AFC",
+      "division": "WEST",
+      "primary": "#101820",
+      "secondary": "#a5acaf",
+      "glyph": "plus",
+      "bitmap": [
+        "00111100",
+        "00111100",
+        "11111111",
+        "11111111",
+        "11111111",
+        "00111100",
+        "00111100",
+        "00111100"
+      ],
+      "png40": "assets/badges/40/lv.png",
+      "png120": "assets/badges/120/lv.png",
+      "glyphPng": "assets/badges/glyph-120/lv.png",
+      "sprite": {
+        "x": 720,
+        "y": 120,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "LAC",
+      "city": "Los Angeles Chargers",
+      "conference": "AFC",
+      "division": "WEST",
+      "primary": "#0080c6",
+      "secondary": "#ffc20e",
+      "glyph": "bolt",
+      "bitmap": [
+        "00011100",
+        "00111000",
+        "01110000",
+        "01111110",
+        "00011100",
+        "00111000",
+        "01110000",
+        "01100000"
+      ],
+      "png40": "assets/badges/40/lac.png",
+      "png120": "assets/badges/120/lac.png",
+      "glyphPng": "assets/badges/glyph-120/lac.png",
+      "sprite": {
+        "x": 840,
+        "y": 120,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "DAL",
+      "city": "Dallas",
+      "conference": "NFC",
+      "division": "EAST",
+      "primary": "#041e42",
+      "secondary": "#869397",
+      "glyph": "star",
+      "bitmap": [
+        "00011000",
+        "00011000",
+        "01111110",
+        "11111111",
+        "01111110",
+        "00111100",
+        "01100110",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/dal.png",
+      "png120": "assets/badges/120/dal.png",
+      "glyphPng": "assets/badges/glyph-120/dal.png",
+      "sprite": {
+        "x": 0,
+        "y": 240,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "NYG",
+      "city": "New York Giants",
+      "conference": "NFC",
+      "division": "EAST",
+      "primary": "#0b2265",
+      "secondary": "#a71930",
+      "glyph": "ring",
+      "bitmap": [
+        "00111100",
+        "01111110",
+        "11000011",
+        "11000011",
+        "11000011",
+        "11000011",
+        "01111110",
+        "00111100"
+      ],
+      "png40": "assets/badges/40/nyg.png",
+      "png120": "assets/badges/120/nyg.png",
+      "glyphPng": "assets/badges/glyph-120/nyg.png",
+      "sprite": {
+        "x": 120,
+        "y": 240,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "PHI",
+      "city": "Philadelphia",
+      "conference": "NFC",
+      "division": "EAST",
+      "primary": "#004c54",
+      "secondary": "#a5acaf",
+      "glyph": "chevron",
+      "bitmap": [
+        "00000000",
+        "11000011",
+        "11100111",
+        "01111110",
+        "00111100",
+        "00011000",
+        "00000000",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/phi.png",
+      "png120": "assets/badges/120/phi.png",
+      "glyphPng": "assets/badges/glyph-120/phi.png",
+      "sprite": {
+        "x": 240,
+        "y": 240,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "WAS",
+      "city": "Washington",
+      "conference": "NFC",
+      "division": "EAST",
+      "primary": "#5a1414",
+      "secondary": "#ffb612",
+      "glyph": "pennant",
+      "bitmap": [
+        "11000000",
+        "11111100",
+        "11111110",
+        "11111100",
+        "11000000",
+        "11000000",
+        "11000000",
+        "11000000"
+      ],
+      "png40": "assets/badges/40/was.png",
+      "png120": "assets/badges/120/was.png",
+      "glyphPng": "assets/badges/glyph-120/was.png",
+      "sprite": {
+        "x": 360,
+        "y": 240,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "CHI",
+      "city": "Chicago",
+      "conference": "NFC",
+      "division": "NORTH",
+      "primary": "#0b162a",
+      "secondary": "#c83803",
+      "glyph": "bars",
+      "bitmap": [
+        "00000000",
+        "00000011",
+        "00000011",
+        "00011011",
+        "00011011",
+        "11011011",
+        "11011011",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/chi.png",
+      "png120": "assets/badges/120/chi.png",
+      "glyphPng": "assets/badges/glyph-120/chi.png",
+      "sprite": {
+        "x": 480,
+        "y": 240,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "DET",
+      "city": "Detroit",
+      "conference": "NFC",
+      "division": "NORTH",
+      "primary": "#0076b6",
+      "secondary": "#b0b7bc",
+      "glyph": "grid",
+      "bitmap": [
+        "11111111",
+        "10000001",
+        "10111101",
+        "10100101",
+        "10100101",
+        "10111101",
+        "10000001",
+        "11111111"
+      ],
+      "png40": "assets/badges/40/det.png",
+      "png120": "assets/badges/120/det.png",
+      "glyphPng": "assets/badges/glyph-120/det.png",
+      "sprite": {
+        "x": 600,
+        "y": 240,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "GB",
+      "city": "Green Bay",
+      "conference": "NFC",
+      "division": "NORTH",
+      "primary": "#203731",
+      "secondary": "#ffb612",
+      "glyph": "ring",
+      "bitmap": [
+        "00111100",
+        "01111110",
+        "11000011",
+        "11000011",
+        "11000011",
+        "11000011",
+        "01111110",
+        "00111100"
+      ],
+      "png40": "assets/badges/40/gb.png",
+      "png120": "assets/badges/120/gb.png",
+      "glyphPng": "assets/badges/glyph-120/gb.png",
+      "sprite": {
+        "x": 720,
+        "y": 240,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "MIN",
+      "city": "Minnesota",
+      "conference": "NFC",
+      "division": "NORTH",
+      "primary": "#4f2683",
+      "secondary": "#ffc62f",
+      "glyph": "anchor",
+      "bitmap": [
+        "00011000",
+        "00011000",
+        "01111110",
+        "00011000",
+        "11011011",
+        "11011011",
+        "01111110",
+        "00111100"
+      ],
+      "png40": "assets/badges/40/min.png",
+      "png120": "assets/badges/120/min.png",
+      "glyphPng": "assets/badges/glyph-120/min.png",
+      "sprite": {
+        "x": 840,
+        "y": 240,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "ATL",
+      "city": "Atlanta",
+      "conference": "NFC",
+      "division": "SOUTH",
+      "primary": "#a71930",
+      "secondary": "#101820",
+      "glyph": "bolt",
+      "bitmap": [
+        "00011100",
+        "00111000",
+        "01110000",
+        "01111110",
+        "00011100",
+        "00111000",
+        "01110000",
+        "01100000"
+      ],
+      "png40": "assets/badges/40/atl.png",
+      "png120": "assets/badges/120/atl.png",
+      "glyphPng": "assets/badges/glyph-120/atl.png",
+      "sprite": {
+        "x": 0,
+        "y": 360,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "CAR",
+      "city": "Carolina",
+      "conference": "NFC",
+      "division": "SOUTH",
+      "primary": "#0085ca",
+      "secondary": "#101820",
+      "glyph": "eye",
+      "bitmap": [
+        "00000000",
+        "00111100",
+        "01111110",
+        "11011011",
+        "11011011",
+        "01111110",
+        "00111100",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/car.png",
+      "png120": "assets/badges/120/car.png",
+      "glyphPng": "assets/badges/glyph-120/car.png",
+      "sprite": {
+        "x": 120,
+        "y": 360,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "NO",
+      "city": "New Orleans",
+      "conference": "NFC",
+      "division": "SOUTH",
+      "primary": "#d3bc8d",
+      "secondary": "#101820",
+      "glyph": "diamond",
+      "bitmap": [
+        "00011000",
+        "00111100",
+        "01111110",
+        "11111111",
+        "11111111",
+        "01111110",
+        "00111100",
+        "00011000"
+      ],
+      "png40": "assets/badges/40/no.png",
+      "png120": "assets/badges/120/no.png",
+      "glyphPng": "assets/badges/glyph-120/no.png",
+      "sprite": {
+        "x": 240,
+        "y": 360,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "TB",
+      "city": "Tampa Bay",
+      "conference": "NFC",
+      "division": "SOUTH",
+      "primary": "#d50a0a",
+      "secondary": "#34302b",
+      "glyph": "anchor",
+      "bitmap": [
+        "00011000",
+        "00011000",
+        "01111110",
+        "00011000",
+        "11011011",
+        "11011011",
+        "01111110",
+        "00111100"
+      ],
+      "png40": "assets/badges/40/tb.png",
+      "png120": "assets/badges/120/tb.png",
+      "glyphPng": "assets/badges/glyph-120/tb.png",
+      "sprite": {
+        "x": 360,
+        "y": 360,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "ARI",
+      "city": "Arizona",
+      "conference": "NFC",
+      "division": "WEST",
+      "primary": "#97233f",
+      "secondary": "#ffb612",
+      "glyph": "tri",
+      "bitmap": [
+        "00000000",
+        "00011000",
+        "00111100",
+        "01111110",
+        "11111111",
+        "11111111",
+        "00000000",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/ari.png",
+      "png120": "assets/badges/120/ari.png",
+      "glyphPng": "assets/badges/glyph-120/ari.png",
+      "sprite": {
+        "x": 480,
+        "y": 360,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "LAR",
+      "city": "Los Angeles Rams",
+      "conference": "NFC",
+      "division": "WEST",
+      "primary": "#003594",
+      "secondary": "#ffd100",
+      "glyph": "shield",
+      "bitmap": [
+        "01111110",
+        "11111111",
+        "11111111",
+        "11111111",
+        "01111110",
+        "00111100",
+        "00011000",
+        "00000000"
+      ],
+      "png40": "assets/badges/40/lar.png",
+      "png120": "assets/badges/120/lar.png",
+      "glyphPng": "assets/badges/glyph-120/lar.png",
+      "sprite": {
+        "x": 600,
+        "y": 360,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "SF",
+      "city": "San Francisco",
+      "conference": "NFC",
+      "division": "WEST",
+      "primary": "#aa0000",
+      "secondary": "#b3995d",
+      "glyph": "plus",
+      "bitmap": [
+        "00111100",
+        "00111100",
+        "11111111",
+        "11111111",
+        "11111111",
+        "00111100",
+        "00111100",
+        "00111100"
+      ],
+      "png40": "assets/badges/40/sf.png",
+      "png120": "assets/badges/120/sf.png",
+      "glyphPng": "assets/badges/glyph-120/sf.png",
+      "sprite": {
+        "x": 720,
+        "y": 360,
+        "w": 120,
+        "h": 120
+      }
+    },
+    {
+      "abbr": "SEA",
+      "city": "Seattle",
+      "conference": "NFC",
+      "division": "WEST",
+      "primary": "#002244",
+      "secondary": "#69be28",
+      "glyph": "wave",
+      "bitmap": [
+        "00000000",
+        "11000011",
+        "01100110",
+        "00111100",
+        "00000000",
+        "11000011",
+        "01100110",
+        "00111100"
+      ],
+      "png40": "assets/badges/40/sea.png",
+      "png120": "assets/badges/120/sea.png",
+      "glyphPng": "assets/badges/glyph-120/sea.png",
+      "sprite": {
+        "x": 840,
+        "y": 360,
+        "w": 120,
+        "h": 120
+      }
+    }
+  ]
+}
