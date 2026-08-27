@@ -26,6 +26,7 @@ except ImportError:
 # Shared core (ADR 001). This module is now an adapter over sleeper/*.
 from sleeper import client as core_client
 from sleeper import config as core_config
+from sleeper import breakout as core_breakout
 from sleeper import league as core_league
 from sleeper import market as core_market
 from sleeper import opportunity as core_opportunity
@@ -729,6 +730,33 @@ class GetVegasReportInput(BaseModel):
     roster_only: bool = Field(
         default=False,
         description="Show only the teams your rostered players play for, rather than all 32."
+    )
+
+
+
+class GetBreakoutRadarInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
+    positions: Optional[List[PositionEnum]] = Field(
+        default=None,
+        description="Positions to scan (default: QB, RB, WR, TE)"
+    )
+    weeks_back: int = Field(
+        default=6, ge=4, le=12,
+        description="Completed weeks to analyze (4–12, default 6). Split in half: the "
+                    "earlier half is the baseline, the recent half is the trend."
+    )
+    min_opportunity: float = Field(
+        default=3.0, ge=0.0, le=20.0,
+        description="Minimum recent touches or targets per game (default 3). The floor "
+                    "that keeps a jump from one touch to three off the list."
+    )
+    limit: int = Field(
+        default=15, ge=1, le=40,
+        description="Players to return (1–40, default 15)"
+    )
+    free_agents_only: bool = Field(
+        default=False,
+        description="Restrict to players nobody in the league has rostered."
     )
 
 
@@ -2626,6 +2654,183 @@ _OPP_LABELS = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Tool 20 — get_breakout_radar (role change, before the field notices)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _fmt_delta(component: Optional[Dict[str, Any]]) -> str:
+    """Percentage-point change in a share, or an em dash when unmeasurable."""
+    if not component or component.get("delta") is None:
+        return "—"
+    return f"{component['delta']:+.0f}"
+
+
+@mcp.tool(
+    name="sleeper_get_breakout_radar",
+    annotations={
+        "title": "Get Breakout Radar (Rising Roles Nobody Has Noticed)",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+async def sleeper_get_breakout_radar(params: GetBreakoutRadarInput) -> str:
+    """Find players whose role is growing before the rest of the league reacts.
+
+    Every other tool here answers "who is good right now". This one answers
+    "whose role is changing", which is the only version of the question still
+    cheap to act on. It splits a window of completed weeks in half and measures
+    the change in four shares of the player's own offense:
+
+      - snap share
+      - opportunity share (targets for receivers, carries plus targets for backs)
+      - air-yards share
+      - red zone share
+
+    Shares, not raw counts: a team that ran fifteen extra plays inflates
+    everybody's numbers, and six targets means something different on a 45-play
+    afternoon than a 75-play one. Halves, not endpoints: comparing week one to
+    week six makes the score hostage to two games.
+
+    A depth chart promotion recorded by the snapshot store adds to the score,
+    and the whole thing is then discounted by how hard the field is already
+    adding the player. That gate is the point of the tool — a rising role
+    everybody has spotted is an auction, not a find.
+
+    Args:
+        params (GetBreakoutRadarInput):
+            - positions (List[PositionEnum]): Positions to scan (default QB/RB/WR/TE)
+            - weeks_back (int): Completed weeks to analyze (4–12, default 6)
+            - min_opportunity (float): Minimum recent touches/targets per game (default 3)
+            - limit (int): Players to return (1–40, default 15)
+            - free_agents_only (bool): Only players nobody has rostered
+
+    Returns:
+        str: Markdown table ranked by breakout score, showing each component's
+             percentage-point change so you can see which part of the role moved,
+             plus depth chart movement and current league-wide buzz.
+
+    Example prompts:
+        - "Who's about to break out?"
+        - "Show me rising roles nobody has noticed yet"
+        - "Any free agents whose usage is trending up hard?"
+    """
+    try:
+        await _maybe_snapshot()
+
+        positions = (
+            [p.value for p in params.positions]
+            if params.positions
+            else ["QB", "RB", "WR", "TE"]
+        )
+        weeks, season = await _completed_stat_weeks(params.weeks_back)
+        if len(weeks) < 4:
+            return (
+                "# 🚀 Breakout Radar\n\n"
+                "*Not enough completed weeks to split into a baseline and a trend. "
+                "This needs at least four.*"
+            )
+
+        players, attention, depth_moves = await _parallel_fetch(
+            _get_players(),
+            _get_attention(),
+            _depth_chart_moves(21, positions),
+        )
+        weekly_blobs = dict(zip(
+            weeks, await _parallel_fetch(*[_get_weekly_stats(season, w) for w in weeks])
+        ))
+
+        rows = core_breakout.build_candidates(
+            weekly_blobs, players, weeks,
+            positions=positions,
+            min_recent_opportunity=params.min_opportunity,
+        )
+        if not rows:
+            return (
+                "# 🚀 Breakout Radar\n\n"
+                f"*No players cleared the {params.min_opportunity:g} opportunity-per-game "
+                "floor in this window.*"
+            )
+
+        if params.free_agents_only:
+            league = await _get_league()
+            taken = await _get_taken_player_ids(league["league_id"])
+            rows = [r for r in rows if r["pid"] not in taken]
+            if not rows:
+                return "# 🚀 Breakout Radar\n\n*No unrostered players cleared the filters.*"
+
+        # Apply the depth chart bonus and the obscurity gate, then re-rank: the
+        # gate can reorder the board substantially, which is the whole idea.
+        scored = []
+        for r in rows:
+            att = _attention_for(r["pid"], attention)
+            gate = core_breakout.apply_gate(
+                r["trend_score"],
+                attention_norm=att["norm"],
+                depth_slots_gained=depth_moves.get(r["pid"]),
+            )
+            scored.append({**r, **gate, "attention": att})
+        scored.sort(key=lambda r: r["breakout_score"], reverse=True)
+        top = scored[: params.limit]
+
+        earlier, recent = core_breakout.split_window(weeks)
+        lines = [
+            "# 🚀 Breakout Radar",
+            f"*{season} weeks {earlier[0]}–{earlier[-1]} vs {recent[0]}–{recent[-1]}"
+            + (" · free agents only" if params.free_agents_only else "")
+            + "*",
+            "",
+            f"{'#':<3} {'Player':<22} {'Pos':<4} {'Tm':<4} {'Score':>6} {'Snap':>6} {'Opp':>5} "
+            f"{'Air':>5} {'RZ':>5} {'Depth':>6} {'Opp/g':>6}  {'Buzz':<8}",
+            "─" * 96,
+        ]
+        for rank, r in enumerate(top, 1):
+            c = r["components"]
+            depth = depth_moves.get(r["pid"])
+            lines.append(
+                f"{rank:<3} {_player_display_name(r['player'])[:22]:<22} {r['position']:<4} "
+                f"{(r['team'] or 'FA')[:3]:<4} {r['breakout_score']:>6.1f} "
+                f"{_fmt_delta(c.get('snap_share')):>6} {_fmt_delta(c.get('opportunity_share')):>5} "
+                f"{_fmt_delta(c.get('air_share')):>5} {_fmt_delta(c.get('rz_share')):>5} "
+                f"{(f'+{depth}' if depth else '—'):>6} {r['recent_opportunity']:>6.1f}  "
+                f"{r['attention']['label']:<8}"
+            )
+
+        gated = [r for r in top if r["gate_multiplier"] < 0.95]
+        lines += [
+            "",
+            "*All deltas are percentage-point changes in the player's share of his own "
+            "offense, recent half vs earlier half. Opp = targets for receivers, carries plus "
+            "targets for backs. Depth = depth chart slots climbed since the last snapshot. "
+            f"Opp/g = recent opportunities per game, the floor that keeps noise out "
+            f"(currently {params.min_opportunity:g}).*",
+        ]
+        if gated:
+            lines.append(
+                f"*{len(gated)} of these are already being added league-wide and have been "
+                "scored down accordingly — their raw trend is stronger than the number shown. "
+                "Act on them sooner or expect to pay.*"
+            )
+        if any(r["position"] == "QB" for r in top):
+            lines.append(
+                "*Quarterback is close to binary — you take the snaps or you do not — so a "
+                "backup stepping in registers a far larger share swing than any receiver or "
+                "back can. Those rows are real role changes and stream-worthy, but they are "
+                "not comparable to the rest on the same scale. Pass positions=['RB','WR','TE'] "
+                "to exclude them.*"
+            )
+        if not depth_moves:
+            lines.append(
+                "*No depth chart history available yet, so the Depth column is empty. It "
+                "fills in once a second daily snapshot exists.*"
+            )
+        return "\n".join(lines)
+
+    except Exception as exc:
+        return _handle_error(exc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Tool 17 — get_faab_market (what things actually cost in this league)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -3005,9 +3210,10 @@ async def sleeper_get_vegas_report(params: GetVegasReportInput) -> str:
                     "(bye weeks, or lines not yet up).*"
                 )
 
-        ranked = sorted(
-            teams, key=lambda t: odds[t]["implied_total"] or 0, reverse=True
-        )
+        # Alphabetical tiebreak on purpose: several teams share an implied total
+        # most weeks, and iterating a set is not stable across processes, so
+        # without this the same week's report reshuffles itself between runs.
+        ranked = sorted(teams, key=lambda t: (-(odds[t]["implied_total"] or 0), t))
 
         lines = [
             f"# 🎲 Vegas Report — Week {week}",
@@ -3094,6 +3300,49 @@ async def _maybe_snapshot() -> None:
         )
     except Exception:
         pass
+
+
+async def _snapshot_window(since_days: int) -> tuple:
+    """
+    (from_date, to_date, all_dates) for comparing two snapshots.
+
+    Picks the most recent snapshot at or before the requested cutoff, falling
+    back to the oldest on file when history does not reach that far back —
+    comparing against something is always more useful than refusing to compare.
+    Returns (None, None, dates) when there is nothing to compare against yet.
+    """
+    dates = await asyncio.to_thread(snapshots.snapshot_dates)
+    if len(dates) < 2:
+        return None, None, dates
+    target = (date.today() - timedelta(days=since_days)).isoformat()
+    earlier = [d for d in dates[:-1] if d <= target]
+    return (earlier[-1] if earlier else dates[0]), dates[-1], dates
+
+
+async def _depth_chart_moves(since_days: int, positions: List[str]) -> Dict[str, int]:
+    """
+    {player_id: slots climbed} since the chosen snapshot.
+
+    Depth chart order counts up from the starter, so moving from 3 to 1 is a
+    gain of 2. Returns an empty map when there is no history yet, which callers
+    treat as "no signal" rather than "no movement".
+    """
+    from_date, to_date, _ = await _snapshot_window(since_days)
+    if not from_date:
+        return {}
+    changes = await asyncio.to_thread(snapshots.diff_players, from_date, to_date, positions)
+    moves: Dict[str, int] = {}
+    for change in changes:
+        for field in change["changes"]:
+            if field["field"] != "depth_chart_order":
+                continue
+            old_order, new_order = field["old"], field["new"]
+            if old_order is None or new_order is None:
+                continue
+            gained = int(old_order) - int(new_order)
+            if gained > 0:
+                moves[change["player_id"]] = gained
+    return moves
 
 
 async def _completed_stat_weeks(weeks_back: int) -> tuple:
@@ -3200,8 +3449,8 @@ async def sleeper_get_radar_movers(params: GetRadarMoversInput) -> str:
             else ["QB", "RB", "WR", "TE"]
         )
 
-        dates = await asyncio.to_thread(snapshots.snapshot_dates)
-        if len(dates) < 2:
+        from_date, to_date, dates = await _snapshot_window(params.since_days)
+        if from_date is None:
             captured = dates[0] if dates else "nothing yet"
             return (
                 "# 🛰️ Radar Movers\n\n"
@@ -3213,11 +3462,6 @@ async def sleeper_get_radar_movers(params: GetRadarMoversInput) -> str:
                 "downgrades, and league drops. Running any radar tool once a day (or "
                 "scheduling it) is what builds the history."
             )
-
-        target = (date.today() - timedelta(days=params.since_days)).isoformat()
-        earlier = [d for d in dates[:-1] if d <= target]
-        from_date = earlier[-1] if earlier else dates[0]
-        to_date = dates[-1]
 
         movers, players = await _parallel_fetch(
             asyncio.to_thread(snapshots.diff_players, from_date, to_date, positions),

@@ -145,6 +145,7 @@ Fully quit (Cmd-Q) and relaunch Claude Desktop after saving — it only reads th
 | `sleeper_get_faab_market` | What waiver claims actually cost in your league, every manager's remaining budget, and a bid anchored to those prices |
 | `sleeper_get_recent_drops` | Players your leaguemates cut who are still unrostered, with snap trend and buzz |
 | `sleeper_get_vegas_report` | Implied team totals from the betting line, with game script and line movement |
+| `sleeper_get_breakout_radar` | Rising roles the field hasn't noticed — snap, opportunity, air-yards and red-zone share deltas, gated on low add volume |
 | `sleeper_get_optimal_lineup` | Computes your best possible lineup this week and flags swaps vs. your current starters |
 | `sleeper_get_injury_report` | Scans your roster for Questionable/Doubtful/Out/IR designations |
 | `sleeper_get_bye_week_report` | Maps every roster player's bye week (from the real NFL schedule) and flags collisions |
