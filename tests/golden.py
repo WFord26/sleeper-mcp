@@ -40,6 +40,9 @@ CASES = [
     ("sleeper_get_draft_best_available", {"limit": 10}),
     ("sleeper_get_opportunity_report", {"positions": ["RB", "WR"], "limit": 5}),
     ("sleeper_get_radar_movers", {"limit": 10}),
+    ("sleeper_get_faab_market", {"limit": 8}),
+    ("sleeper_get_recent_drops", {"days_back": 14, "limit": 10}),
+    ("sleeper_get_vegas_report", {"week": 1}),
 ]
 
 

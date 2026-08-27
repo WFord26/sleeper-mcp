@@ -195,6 +195,43 @@ async def get_matchups(
     )
 
 
+async def get_transactions(
+    week: int,
+    league_id: Optional[str] = None,
+    *,
+    is_final: bool = False,
+) -> List[Dict[str, Any]]:
+    """
+    Every add, drop, trade, and waiver claim recorded for one week.
+
+    Includes failed claims with their bids attached, which is the reason to call
+    this at all: the losing bids are what reveal a player's real clearing price.
+
+    Cached on the same immutable-week principle as matchups — a settled week's
+    transaction log never changes, so a full season costs at most 18 calls once.
+    """
+    lid = league_id or await get_league_id()
+    ttl = config.TTL_TRANSACTIONS_FINAL if is_final else config.TTL_TRANSACTIONS_LIVE
+    return await cache.memory.get_or_fetch(
+        f"transactions:{lid}:{week}",
+        lambda: client.sleeper_get(f"/league/{lid}/transactions/{week}"),
+        ttl,
+    )
+
+
+async def get_season_transactions(
+    through_week: int,
+    league_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Flattened transaction log for weeks 1..through_week, fetched concurrently."""
+    lid = league_id or await get_league_id()
+    weeks = list(range(1, max(1, through_week) + 1))
+    per_week = await client.gather(*[
+        get_transactions(w, lid, is_final=(w < through_week)) for w in weeks
+    ])
+    return [t for week in per_week for t in (week or [])]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Derived views
 # ─────────────────────────────────────────────────────────────────────────────

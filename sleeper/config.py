@@ -53,6 +53,8 @@ STATS_SEASON = os.getenv("SLEEPER_STATS_SEASON", "2025")
 # ── Upstream APIs ───────────────────────────────────────────────────────────
 API_BASE = "https://api.sleeper.app/v1"
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/football/nfl"
+# The scoreboard endpoint stopped carrying odds; the core API still does.
+ESPN_CORE_BASE = "https://sports.core.api.espn.com/v2/sports/football/leagues/nfl"
 OPEN_METEO_BASE = "https://api.open-meteo.com/v1/forecast"
 
 # ── HTTP behavior ───────────────────────────────────────────────────────────
@@ -74,6 +76,9 @@ TTL_STATS = 10 * 60
 TTL_PROJECTIONS = 60 * 60
 TTL_SCHEDULE = 24 * 60 * 60
 TTL_TRENDING = 30 * 60       # add/drop velocity; meaningful movement is hourly
+TTL_TRANSACTIONS_LIVE = 10 * 60   # the current week is still being written
+TTL_TRANSACTIONS_FINAL = None     # a settled week never changes again
+TTL_ODDS = 15 * 60           # lines move, but not faster than this matters to us
 
 # ── Trending ("who is the field already on?") ───────────────────────────────
 # Sleeper's /players/nfl/trending endpoint caps its response at 100 players no

@@ -10,6 +10,7 @@ No authentication required — uses the public Sleeper API.
 
 import json
 import math
+import time
 import asyncio
 from datetime import date, timedelta
 from typing import Optional, List, Dict, Any, Union
@@ -26,9 +27,11 @@ except ImportError:
 from sleeper import client as core_client
 from sleeper import config as core_config
 from sleeper import league as core_league
+from sleeper import market as core_market
 from sleeper import opportunity as core_opportunity
 from sleeper import render
 from sleeper import snapshots
+from sleeper import vegas as core_vegas
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Server initialization
@@ -43,6 +46,8 @@ mcp = FastMCP("sleeper_fantasy_mcp")
 API_BASE = "https://api.sleeper.app/v1"
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/football/nfl"
 OPEN_METEO_BASE = "https://api.open-meteo.com/v1/forecast"
+# The scoreboard endpoint no longer carries betting lines; the core API does.
+ESPN_CORE_BASE = "https://sports.core.api.espn.com/v2/sports/football/leagues/nfl"
 
 SLEEPER_USERNAME = "GronkQuixote"
 CURRENT_SEASON = "2026"   # upcoming / active season
@@ -63,6 +68,10 @@ SOS_LOOKAHEAD_WEEKS = 4      # how many upcoming weeks feed the schedule bonus
 SOS_MAX_BONUS = 2.0          # max +/- pts swing from strength of schedule
 SNAP_TREND_WEEKS = 3         # how many recent completed weeks feed the trend bonus
 SNAP_TREND_MAX_BONUS = 3.0   # max +/- pts swing from a rising/falling snap share
+# Vegas implied team total for the upcoming week. Kept alongside — not instead
+# of — the defense-based SOS bonus: no line exists for Week 9 in Week 4, so the
+# two cover different horizons. This one is the sharper read on the week ahead.
+VEGAS_MAX_BONUS = 2.5        # max +/- pts swing from the game's implied total
 
 # ── Attention / "under the radar" tuning ────────────────────────────────────
 # Sleeper's trending endpoint reports league-wide add and drop volume. We use it
@@ -212,6 +221,10 @@ async def _fetch_espn_week(season: str, week: int) -> List[Dict[str, Any]]:
             games.append({
                 "home": home,
                 "away": away,
+                # Needed to look the game's betting line up in ESPN's core API,
+                # which keys odds by event and competition id.
+                "event_id": event.get("id"),
+                "competition_id": comp.get("id") or event.get("id"),
                 "date_utc": comp.get("date") or event.get("date"),
                 "venue_name": venue.get("fullName", "Unknown venue"),
                 "indoor": bool(venue.get("indoor", False)),
@@ -323,6 +336,78 @@ def _weather_fantasy_note(weather: Dict[str, Any]) -> str:
     if temp_min is not None and temp_min <= 20:
         notes.append("extreme cold — kicking distance/grip affected")
     return "; ".join(notes) if notes else "no significant weather concerns"
+
+
+_odds_cache: Dict[tuple, Dict[str, Any]] = {}
+
+
+async def _fetch_game_odds(event_id: str, competition_id: str) -> Optional[Dict[str, Any]]:
+    """
+    One game's betting line from ESPN's core API.
+
+    Returns None on any failure. Odds are an enhancement to the ranking, never a
+    dependency of it — a sportsbook outage or an unposted line must degrade the
+    composite score gracefully rather than fail the tool.
+    """
+    if not event_id or not competition_id:
+        return None
+    try:
+        payload = await core_client.request_json(
+            f"{ESPN_CORE_BASE}/events/{event_id}/competitions/{competition_id}/odds",
+            timeout=15.0,
+            retries=1,
+        )
+    except Exception:
+        return None
+    return core_vegas.parse_odds(payload)
+
+
+async def _get_week_odds(season: str, week: int) -> Dict[str, Dict[str, Any]]:
+    """
+    Implied team totals for every team playing in a given week.
+
+    Returns {team_abbr: {implied_total, opponent, is_home, spread, over_under,
+    spread_move, note}}. Teams on bye, and games with no line posted, are simply
+    absent — callers treat a missing team as "no signal" rather than "zero".
+    """
+    key = (season, week)
+    if key in _odds_cache:
+        return _odds_cache[key]
+
+    schedule = await _get_full_schedule(season)
+    games = schedule["games_by_week"].get(week, [])
+    if not games:
+        _odds_cache[key] = {}
+        return {}
+
+    results = await _parallel_fetch(*[
+        _fetch_game_odds(g.get("event_id"), g.get("competition_id")) for g in games
+    ])
+
+    by_team: Dict[str, Dict[str, Any]] = {}
+    for game, odds in zip(games, results):
+        if not odds:
+            continue
+        home_total, away_total = core_vegas.implied_totals(
+            odds["spread"], odds["over_under"], home_favorite=odds.get("home_favorite")
+        )
+        for team, opponent, total, is_home in (
+            (game["home"], game["away"], home_total, True),
+            (game["away"], game["home"], away_total, False),
+        ):
+            by_team[team] = {
+                "implied_total": total,
+                "opponent": opponent,
+                "is_home": is_home,
+                "spread": odds["spread"],
+                "over_under": odds["over_under"],
+                "spread_move": odds.get("spread_move"),
+                "provider": odds.get("provider"),
+                "note": core_vegas.describe_environment(total, odds, is_home),
+            }
+
+    _odds_cache[key] = by_team
+    return by_team
 
 
 async def _get_players() -> Dict[str, Any]:
@@ -600,6 +685,53 @@ class GetRadarMoversInput(BaseModel):
     )
 
 
+
+class GetFaabMarketInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
+    player_name: Optional[str] = Field(
+        default=None, max_length=100,
+        description="Optional player to price a bid for. Omit for the league-wide market overview."
+    )
+    aggression: float = Field(
+        default=0.75, ge=0.5, le=0.95,
+        description="Which percentile of this league's past winning bids to anchor a "
+                    "suggestion to (0.5–0.95, default 0.75). Higher = win more claims, "
+                    "burn budget faster."
+    )
+    limit: int = Field(
+        default=12, ge=1, le=40,
+        description="Priciest claims to list (1–40, default 12)"
+    )
+
+
+class GetRecentDropsInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
+    days_back: int = Field(
+        default=14, ge=1, le=120,
+        description="How far back to look for drops (1–120 days, default 14)"
+    )
+    positions: Optional[List[PositionEnum]] = Field(
+        default=None,
+        description="Positions to include (default: QB, RB, WR, TE)"
+    )
+    limit: int = Field(
+        default=15, ge=1, le=40,
+        description="Dropped players to list (1–40, default 15)"
+    )
+
+
+class GetVegasReportInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
+    week: Optional[int] = Field(
+        default=None, ge=1, le=18,
+        description="Week to price (1–18). Defaults to the current week."
+    )
+    roster_only: bool = Field(
+        default=False,
+        description="Show only the teams your rostered players play for, rather than all 32."
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Tool 1 — get_my_team
 # ─────────────────────────────────────────────────────────────────────────────
@@ -822,21 +954,30 @@ def _fmt_signed_count(n: int) -> str:
 
 async def _compute_composite_scores(candidates: List[tuple], proj: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Rank candidates by composite_score = proj_pts + sos_bonus + snap_trend_bonus,
-    instead of raw projected points alone.
+    Rank candidates by composite_score = proj_pts + sos_bonus + snap_trend_bonus
+    + vegas_bonus, instead of raw projected points alone.
+
+    The two matchup signals deliberately coexist rather than one replacing the
+    other. The SOS bonus is defense-quality based and covers the next several
+    weeks, which is the only option that far out since no sportsbook has posted
+    a line for Week 9 yet. The Vegas bonus is the implied team total for the
+    week actually in front of you — a sharper read, priced continuously by a
+    market, but available for one week only.
 
     candidates: [(player_id, player_dict), ...]
     proj: this week's projections blob (player_id -> stat dict)
 
     Returns a list of dicts (one per candidate) sorted by composite score descending,
     each carrying the individual components so callers can show a transparent breakdown:
-    {pid, player, position, team, proj_pts, avg_opp_rank, sos_bonus, snap_delta, snap_bonus, composite}
+    {pid, player, position, team, proj_pts, avg_opp_rank, sos_bonus, snap_delta,
+     snap_bonus, implied_total, vegas_bonus, vegas_note, composite}
     """
     season_type, current_week, season = await _get_current_week()
     start_week = current_week if season_type == "regular" else 1
 
     schedule = await _get_full_schedule(CURRENT_SEASON)
     def_season = await _resolve_def_season()
+    week_odds = await _get_week_odds(CURRENT_SEASON, start_week)
 
     positions_present = {p.get("position") for _, p in candidates}
     rank_maps: Dict[str, Dict[str, int]] = {}
@@ -871,11 +1012,21 @@ async def _compute_composite_scores(candidates: List[tuple], proj: Dict[str, Any
         if pos in SNAP_TREND_ELIGIBLE_POS:
             snap_delta, snap_bonus = _snap_trend_bonus_for_player(pid, weekly_blobs, trend_weeks)
 
-        composite = proj_pts + sos_bonus + snap_bonus
+        # A team with no line posted (bye week, or odds not yet up) contributes
+        # nothing rather than being penalized as if its offense were expected to
+        # score zero.
+        game = week_odds.get(team) if team else None
+        implied_total = game["implied_total"] if game else None
+        vegas_bonus = core_vegas.total_bonus(implied_total, VEGAS_MAX_BONUS)
+
+        composite = proj_pts + sos_bonus + snap_bonus + vegas_bonus
         results.append({
             "pid": pid, "player": p, "position": pos, "team": team,
             "proj_pts": proj_pts, "avg_opp_rank": avg_rank, "sos_bonus": sos_bonus,
-            "snap_delta": snap_delta, "snap_bonus": snap_bonus, "composite": composite,
+            "snap_delta": snap_delta, "snap_bonus": snap_bonus,
+            "implied_total": implied_total, "vegas_bonus": vegas_bonus,
+            "vegas_note": game["note"] if game else None,
+            "composite": composite,
         })
 
     results.sort(key=lambda x: x["composite"], reverse=True)
@@ -961,10 +1112,10 @@ async def sleeper_get_available_players(params: GetAvailablePlayersInput) -> str
 
         lines = [
             f"# Top Available {params.position.value} — The Chrysoloras Gang (Full PPR)",
-            "*Ranked by composite score: projection + strength of schedule + snap trend*",
+            "*Ranked by composite score: projection + strength of schedule + snap trend + Vegas implied total*",
             "",
-            f"{'#':<3} {'Player':<22} {'Pos':<4} {'Team':<5} {'Comp':>6} {'Proj':>6} {'SOS':>9} {'Snap Δ':>8} {'Adds':>7}  {'Buzz':<8}",
-            "─" * 88,
+            f"{'#':<3} {'Player':<22} {'Pos':<4} {'Team':<5} {'Comp':>6} {'Proj':>6} {'SOS':>9} {'Snap Δ':>8} {'Vegas':>6} {'Adds':>7}  {'Buzz':<8}",
+            "─" * 95,
         ]
         for rank, r in enumerate(ranked, 1):
             name = _player_display_name(r["player"])[:22]
@@ -972,10 +1123,11 @@ async def sleeper_get_available_players(params: GetAvailablePlayersInput) -> str
             att = _attention_for(r["pid"], attention)
             sos_str = f"{r['avg_opp_rank']:.0f}/32" if r["avg_opp_rank"] is not None else "—"
             snap_str = f"{r['snap_delta']:+.0f}%" if r["snap_delta"] is not None else "—"
+            vegas_str = f"{r['implied_total']:.1f}" if r.get("implied_total") is not None else "—"
             lines.append(
                 f"{rank:<3} {name:<22} {r['position']:<4} {team:<5} "
                 f"{r['composite']:>6.1f} {r['proj_pts']:>6.1f} {sos_str:>9} {snap_str:>8} "
-                f"{_fmt_count(att['adds']):>7}  {att['label']:<8}"
+                f"{vegas_str:>6} {_fmt_count(att['adds']):>7}  {att['label']:<8}"
             )
 
         lines += [
@@ -983,6 +1135,7 @@ async def sleeper_get_available_players(params: GetAvailablePlayersInput) -> str
             "*SOS = avg. matchup rank over next "
             f"{SOS_LOOKAHEAD_WEEKS} weeks (1=easiest/32=hardest). "
             f"Snap Δ = offensive snap-share change over the last {SNAP_TREND_WEEKS} completed weeks. "
+            "Vegas = this week's implied team total from the betting line. "
             f"Adds = league-wide pickups in the last {core_config.TRENDING_LOOKBACK_HOURS}h; "
             "a strong player still marked `quiet` is the one the field has not found yet.*",
         ]
@@ -1066,13 +1219,13 @@ async def sleeper_get_waiver_recommendations(params: GetWaiverRecommendationsInp
 
         lines = [
             "# 🏈 Waiver Wire Recommendations — The Chrysoloras Gang",
-            "*Ranked by composite score: projection + strength of schedule + snap trend*",
+            "*Ranked by composite score: projection + strength of schedule + snap trend + Vegas implied total*",
             "",
             "> **Waivers clear:** Wednesday 1 AM MDT",
             "> **Process:** Wed / Thu / Fri at 8 AM MDT",
             "",
-            f"{'#':<3} {'Player':<22} {'Pos':<4} {'Team':<5} {'Comp':>6} {'Proj':>6} {'SOS':>9} {'Snap Δ':>8} {'Adds':>7}  {'Buzz':<8}",
-            "─" * 88,
+            f"{'#':<3} {'Player':<22} {'Pos':<4} {'Team':<5} {'Comp':>6} {'Proj':>6} {'SOS':>9} {'Snap Δ':>8} {'Vegas':>6} {'Adds':>7}  {'Buzz':<8}",
+            "─" * 95,
         ]
         for rank, r in enumerate(ranked, 1):
             name = _player_display_name(r["player"])[:22]
@@ -1080,10 +1233,11 @@ async def sleeper_get_waiver_recommendations(params: GetWaiverRecommendationsInp
             att = _attention_for(r["pid"], attention)
             sos_str = f"{r['avg_opp_rank']:.0f}/32" if r["avg_opp_rank"] is not None else "—"
             snap_str = f"{r['snap_delta']:+.0f}%" if r["snap_delta"] is not None else "—"
+            vegas_str = f"{r['implied_total']:.1f}" if r.get("implied_total") is not None else "—"
             lines.append(
                 f"{rank:<3} {name:<22} {r['position']:<4} {team:<5} "
                 f"{r['composite']:>6.1f} {r['proj_pts']:>6.1f} {sos_str:>9} {snap_str:>8} "
-                f"{_fmt_count(att['adds']):>7}  {att['label']:<8}"
+                f"{vegas_str:>6} {_fmt_count(att['adds']):>7}  {att['label']:<8}"
             )
 
         if not ranked:
@@ -1093,6 +1247,7 @@ async def sleeper_get_waiver_recommendations(params: GetWaiverRecommendationsInp
                 "",
                 f"*SOS = avg. matchup rank over next {SOS_LOOKAHEAD_WEEKS} weeks (1=easiest/32=hardest). "
                 f"Snap Δ = offensive snap-share change over the last {SNAP_TREND_WEEKS} completed weeks. "
+                "Vegas = this week's implied team total from the betting line. "
                 f"Adds = league-wide pickups in the last {core_config.TRENDING_LOOKBACK_HOURS}h — "
                 "`quiet` means cheap, `hot` means bid up.*",
             ]
@@ -2468,6 +2623,426 @@ _OPP_LABELS = {
     "rec_rz_tgt": "rz-tgt",
     "rec_air_yd": "air",
 }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool 17 — get_faab_market (what things actually cost in this league)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def _league_transactions() -> tuple:
+    """(transactions, league, rosters, team_directory) through the current week."""
+    league = await _get_league()
+    league_id = league["league_id"]
+    season_type, current_week, _ = await _get_current_week()
+    # Outside a regular season the current week says nothing about how much of
+    # the league's history exists, so read the whole thing. Completed weeks are
+    # cached forever, so the extra calls are paid once.
+    through_week = max(1, current_week) if season_type == "regular" else 18
+
+    transactions, rosters, directory = await _parallel_fetch(
+        core_league.get_season_transactions(through_week, league_id),
+        core_league.get_rosters(league_id),
+        core_league.get_team_directory(league_id),
+    )
+    return transactions, league, rosters, directory
+
+
+def _team_label(roster_id: Any, directory: Dict[int, Dict[str, Any]]) -> str:
+    entry = directory.get(roster_id) or {}
+    return entry.get("team_name") or entry.get("display_name") or f"roster {roster_id}"
+
+
+@mcp.tool(
+    name="sleeper_get_faab_market",
+    annotations={
+        "title": "Get FAAB Market (Bid Prices and Budgets)",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+async def sleeper_get_faab_market(params: GetFaabMarketInput) -> str:
+    """Price a waiver bid against what claims have actually cost in this league.
+
+    Reads the league's own transaction log — every claim, including the failed
+    ones with their bids attached. The losing bids are the valuable half: a
+    winning bid says what one manager would pay, while the bids underneath say
+    what the player really cleared at and how many rivals wanted him.
+
+    Also reports every manager's remaining FAAB. Knowing a rival is down to $4
+    is the difference between winning a claim for $6 and overpaying $40 for it.
+
+    Args:
+        params (GetFaabMarketInput):
+            - player_name (Optional[str]): Player to price a bid for. Omit for
+              the league-wide market overview.
+            - aggression (float): Percentile of past winning bids to anchor to
+              (0.5–0.95, default 0.75)
+            - limit (int): Priciest claims to list (1–40, default 12)
+
+    Returns:
+        str: Markdown report with the bid distribution, remaining budgets by
+             manager, the priciest claims of the season, and — when a player is
+             named — a suggested bid anchored to those prices.
+
+    Example prompts:
+        - "What do waiver claims go for in my league?"
+        - "How much should I bid on Jaylen Wright?"
+        - "Who still has FAAB left?"
+    """
+    try:
+        transactions, league, rosters, directory = await _league_transactions()
+        settings = league.get("settings") or {}
+        total_budget = int(settings.get("waiver_budget") or 0)
+
+        distribution = core_market.bid_distribution(transactions)
+        if not distribution["claims"]:
+            return (
+                "# 💰 FAAB Market\n\n"
+                "*No waiver claims recorded in this league yet, so there are no prices to "
+                "read off. This fills in as the season's first claims process.*"
+            )
+
+        budgets = core_market.budget_state(rosters, total_budget)
+        my_user_id = await _get_user_id()
+        mine = next(
+            (b for b in budgets.values() if b["owner_id"] == my_user_id), None
+        )
+
+        pcts = distribution["won_percentiles"]
+        lines = [
+            f"# 💰 FAAB Market — {league.get('name', 'your league')}",
+            f"*{distribution['claims']} claims on record · ${total_budget} season budget*",
+            "",
+            "## What claims cost",
+            f"- Median winning bid: **${pcts.get('p50', 0):.0f}**",
+            f"- 75th percentile: **${pcts.get('p75', 0):.0f}**  ·  90th: **${pcts.get('p90', 0):.0f}**",
+            f"- Most ever paid: **${distribution['max_won']}**",
+            f"- Highest *losing* bid: **${distribution['max_lost']}** "
+            "— this is what it takes to not be outbid on something contested",
+            f"- Claims that went for $0: **{distribution['free_claims']}** of "
+            f"{len(distribution['won'])} successful",
+            "",
+        ]
+
+        # Remaining budget, richest first — that ordering is the threat list.
+        lines += ["## Remaining budget", ""]
+        for b in sorted(budgets.values(), key=lambda x: -x["remaining"]):
+            marker = " ← you" if b["owner_id"] == my_user_id else ""
+            bar = "█" * int(b["pct_remaining"] / 10) or "▏"
+            lines.append(
+                f"- `{bar:<10}` **${b['remaining']:>3}** ({b['pct_remaining']:.0f}%) "
+                f"— {_team_label(b['roster_id'], directory)}{marker}"
+            )
+        lines.append("")
+
+        # Priciest claims of the season, so the numbers above have faces on them.
+        history = core_market.player_bid_history(transactions)
+        players = await _get_players()
+        priced = sorted(
+            (
+                (pid, h) for pid, h in history.items()
+                if h["winning_bid"] is not None
+            ),
+            key=lambda kv: -kv[1]["winning_bid"],
+        )[: params.limit]
+
+        if priced:
+            lines += [
+                "## Priciest claims this season",
+                "",
+                f"{'Player':<24} {'Pos':<4} {'Wk':>3} {'Paid':>6} {'Underbids':>22}",
+                "─" * 64,
+            ]
+            for pid, h in priced:
+                player = players.get(pid, {})
+                under = ", ".join(f"${b}" for b in h["losing_bids"][:4]) or "uncontested"
+                lines.append(
+                    f"{(_player_display_name(player) or pid)[:24]:<24} "
+                    f"{player.get('position', '?'):<4} {str(h['week'] or '?'):>3} "
+                    f"${h['winning_bid']:>5} {under:>22}"
+                )
+            lines.append("")
+
+        # A named player turns the overview into an actual recommendation.
+        if params.player_name:
+            pid, player = _resolve_player_by_name(players, params.player_name)
+            remaining = mine["remaining"] if mine else total_budget
+            suggestion = core_market.suggest_bid(
+                distribution, total_budget, remaining, aggression=params.aggression
+            )
+            lines += [f"## Bid guidance — {_player_display_name(player)}", ""]
+            if suggestion["suggested"] is None:
+                lines.append(f"*{suggestion['reason']}*")
+            else:
+                lines += [
+                    f"- Suggested bid: **${suggestion['suggested']}** "
+                    f"({suggestion['pct_of_budget']:.0f}% of a full budget)",
+                    f"- Anchored to the {suggestion['anchor_percentile'][1:]}th percentile "
+                    f"of this league's winning bids (${suggestion['anchor']:.0f})",
+                    f"- You have **${remaining}** left",
+                ]
+                if suggestion["capped_by_budget"]:
+                    lines.append(
+                        "- ⚠️ Your remaining budget is below the anchor price — this bid is "
+                        "everything you have, not what the player is worth"
+                    )
+                if distribution["max_lost"] > suggestion["suggested"]:
+                    lines.append(
+                        f"- ⚠️ Bids as high as **${distribution['max_lost']}** have lost in this "
+                        "league. If you expect competition, this is not enough."
+                    )
+                own = _attention_for(pid, await _get_attention())
+                adds_phrase = (
+                    f"{_fmt_count(own['adds'])} adds in the last "
+                    f"{core_config.TRENDING_LOOKBACK_HOURS}h"
+                    if own["adds"] else "not being added anywhere"
+                )
+                lines.append(
+                    f"- League-wide buzz: **{own['label']}** ({adds_phrase}) — "
+                    + ("expect competition, bid the upper end"
+                       if own["label"] in ("hot", "rising")
+                       else "nobody is chasing him, the low end should clear")
+                )
+            lines.append("")
+
+        return "\n".join(lines)
+
+    except ValueError as ve:
+        return f"Error: {ve}"
+    except Exception as exc:
+        return _handle_error(exc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool 18 — get_recent_drops (drop mining)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool(
+    name="sleeper_get_recent_drops",
+    annotations={
+        "title": "Get Recently Dropped Players",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+async def sleeper_get_recent_drops(params: GetRecentDropsInput) -> str:
+    """Find players your leaguemates cut who are still sitting on the wire.
+
+    Every drop in the league is timestamped in the transaction log, so a player
+    released a week ago whose role has since improved is findable — free talent
+    the field has already passed over once, which is the cheapest kind there is.
+
+    Each drop is cross-referenced with the player's current snap trend and
+    league-wide add volume, so you can separate someone correctly discarded from
+    someone cut in a panic the week before his role changed.
+
+    Unlike the radar movers tool, this needs no snapshot history: the
+    transaction log is retroactive, so a full season is available immediately.
+
+    Args:
+        params (GetRecentDropsInput):
+            - days_back (int): How far back to look (1–120, default 14)
+            - positions (List[PositionEnum]): Positions to include (default QB/RB/WR/TE)
+            - limit (int): Players to list (1–40, default 15)
+
+    Returns:
+        str: Markdown table of dropped-and-still-available players with who cut
+             them, when, their recent snap trend, and current league-wide buzz.
+
+    Example prompts:
+        - "Who got dropped recently that I should look at?"
+        - "Any good players cut in the last week?"
+        - "Show me drop candidates worth claiming"
+    """
+    try:
+        await _maybe_snapshot()
+
+        positions = (
+            [p.value for p in params.positions]
+            if params.positions
+            else ["QB", "RB", "WR", "TE"]
+        )
+
+        transactions, league, rosters, directory = await _league_transactions()
+        league_id = league["league_id"]
+
+        cutoff = int(time.time() * 1000) - params.days_back * core_market.MS_PER_DAY
+        drops = core_market.recent_drops(transactions, since_ms=cutoff)
+        if not drops:
+            return (
+                f"# 🗑️ Recent Drops\n\n*No drops in this league in the last "
+                f"{params.days_back} days.*"
+            )
+
+        taken, players, attention = await _parallel_fetch(
+            _get_taken_player_ids(league_id), _get_players(), _get_attention()
+        )
+        available = core_market.still_dropped(drops, taken)
+        available = [
+            d for d in available
+            if (players.get(d["player_id"], {}) or {}).get("position") in positions
+        ][: params.limit]
+
+        if not available:
+            return (
+                f"# 🗑️ Recent Drops\n\n*Everyone dropped in the last "
+                f"{params.days_back} days has already been picked back up.*"
+            )
+
+        # Snap trend for the same window the composite score uses, so a "rising"
+        # label here means the same thing it means everywhere else in this server.
+        weeks, season = await _completed_stat_weeks(SNAP_TREND_WEEKS)
+        weekly_blobs = dict(zip(
+            weeks, await _parallel_fetch(*[_get_weekly_stats(season, w) for w in weeks])
+        ))
+
+        now_ms = int(time.time() * 1000)
+        lines = [
+            "# 🗑️ Recent Drops — still unrostered",
+            f"*Last {params.days_back} days · {len(available)} available*",
+            "",
+            f"{'Player':<24} {'Pos':<4} {'Tm':<4} {'Dropped':>9} {'By':<18} {'Snap Δ':>8}  {'Buzz':<8}",
+            "─" * 82,
+        ]
+        for d in available:
+            pid = d["player_id"]
+            player = players.get(pid, {})
+            att = _attention_for(pid, attention)
+            delta, _ = _snap_trend_bonus_for_player(pid, weekly_blobs, weeks)
+            days_ago = (now_ms - d["created"]) / core_market.MS_PER_DAY
+            lines.append(
+                f"{(_player_display_name(player) or pid)[:24]:<24} "
+                f"{player.get('position', '?'):<4} {(player.get('team') or 'FA')[:3]:<4} "
+                f"{days_ago:>7.0f}d {_team_label(d['roster_id'], directory)[:18]:<18} "
+                f"{(f'{delta:+.0f}%' if delta is not None else '—'):>8}  {att['label']:<8}"
+            )
+
+        lines += [
+            "",
+            "*A rising snap trend on a player somebody just cut is the highest-value row "
+            "here — his role improved after the decision to drop him was made. `quiet` buzz "
+            "means the rest of Sleeper has not noticed either.*",
+        ]
+        return "\n".join(lines)
+
+    except Exception as exc:
+        return _handle_error(exc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool 19 — get_vegas_report (implied team totals)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool(
+    name="sleeper_get_vegas_report",
+    annotations={
+        "title": "Get Vegas Implied Team Totals",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+async def sleeper_get_vegas_report(params: GetVegasReportInput) -> str:
+    """Show what the betting market expects each offense to score this week.
+
+    A spread and an over/under decompose into an implied total per team:
+
+        favorite = total/2 + |spread|/2      underdog = total/2 - |spread|/2
+
+    That is the best free public estimate of how many points an offense will put
+    up, and it prices in everything a fantasy projection is slow to catch —
+    injuries, weather, and who is actually playing. It also reveals game script:
+    a team favored by ten will run out the clock, while a double-digit underdog
+    throws forty times.
+
+    Line movement is reported too. A line that moved several points since it
+    opened means the market learned something you may not have.
+
+    Args:
+        params (GetVegasReportInput):
+            - week (Optional[int]): Week to price (1–18). Defaults to current.
+            - roster_only (bool): Only the teams your players play for.
+
+    Returns:
+        str: Markdown table of implied totals, highest first, with spread,
+             game total, line movement, and a read on the likely game script.
+
+    Example prompts:
+        - "What do the Vegas lines say this week?"
+        - "Which of my players are in the best scoring environments?"
+        - "Any big line moves I should know about?"
+    """
+    try:
+        _, current_week, _ = await _get_current_week()
+        week = params.week or current_week
+
+        odds = await _get_week_odds(CURRENT_SEASON, week)
+        if not odds:
+            return (
+                f"# 🎲 Vegas Report — Week {week}\n\n"
+                "*No betting lines posted for this week yet. Lines typically go up a few "
+                "days after the previous week's games finish.*"
+            )
+
+        teams = set(odds)
+        roster_teams = set()
+        if params.roster_only:
+            _, _, players, player_ids = await _get_my_roster_context()
+            roster_teams = {
+                (players.get(pid, {}) or {}).get("team")
+                for pid in player_ids
+            } - {None}
+            teams &= roster_teams
+            if not teams:
+                return (
+                    f"# 🎲 Vegas Report — Week {week}\n\n"
+                    "*None of your rostered players' teams have a line posted this week "
+                    "(bye weeks, or lines not yet up).*"
+                )
+
+        ranked = sorted(
+            teams, key=lambda t: odds[t]["implied_total"] or 0, reverse=True
+        )
+
+        lines = [
+            f"# 🎲 Vegas Report — Week {week}",
+            f"*Implied team totals from {odds[ranked[0]].get('provider', 'the betting market')}"
+            + (" · your rostered teams only" if params.roster_only else "")
+            + "*",
+            "",
+            f"{'Tm':<4} {'Implied':>8} {'Opp':<6} {'Spread':>7} {'O/U':>6} {'Move':>6}  {'Read':<48}",
+            "─" * 92,
+        ]
+        for team in ranked:
+            o = odds[team]
+            # `spread` is quoted from the home side, so flip it for the away team
+            # to show each team its own number.
+            own_spread = o["spread"] if o["is_home"] else -o["spread"]
+            move = o.get("spread_move")
+            lines.append(
+                f"{team:<4} {o['implied_total']:>8.1f} "
+                f"{('vs ' if o['is_home'] else '@ ') + o['opponent']:<6} "
+                f"{own_spread:>+7.1f} {o['over_under']:>6.1f} "
+                f"{(f'{move:+.1f}' if move else '—'):>6}  {o['note'][:48]:<48}"
+            )
+
+        lines += [
+            "",
+            f"*Implied total is what the market expects this offense to score. "
+            f"League baseline is ~{core_vegas.BASELINE_TOTAL:.1f}; this feeds the composite "
+            f"ranking as a ±{VEGAS_MAX_BONUS:.1f} point swing in the waiver and available-player "
+            "tools. Move = how far the spread has travelled since it opened, from this "
+            "team's perspective; a negative move means the market came toward them.*",
+        ]
+        return "\n".join(lines)
+
+    except Exception as exc:
+        return _handle_error(exc)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
