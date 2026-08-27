@@ -9,7 +9,9 @@ No authentication required — uses the public Sleeper API.
 """
 
 import json
+import math
 import asyncio
+from datetime import date, timedelta
 from typing import Optional, List, Dict, Any, Union
 from enum import Enum
 
@@ -22,8 +24,11 @@ except ImportError:
 
 # Shared core (ADR 001). This module is now an adapter over sleeper/*.
 from sleeper import client as core_client
+from sleeper import config as core_config
 from sleeper import league as core_league
+from sleeper import opportunity as core_opportunity
 from sleeper import render
+from sleeper import snapshots
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Server initialization
@@ -58,6 +63,19 @@ SOS_LOOKAHEAD_WEEKS = 4      # how many upcoming weeks feed the schedule bonus
 SOS_MAX_BONUS = 2.0          # max +/- pts swing from strength of schedule
 SNAP_TREND_WEEKS = 3         # how many recent completed weeks feed the trend bonus
 SNAP_TREND_MAX_BONUS = 3.0   # max +/- pts swing from a rising/falling snap share
+
+# ── Attention / "under the radar" tuning ────────────────────────────────────
+# Sleeper's trending endpoint reports league-wide add and drop volume. We use it
+# as an attention signal: how much of the field has already noticed a player.
+# Counts are wildly skewed (the top add routinely draws 40x the median of the
+# top 100), so everything below normalizes on a log scale against the busiest
+# player in the current window.
+ATTENTION_HOT_NORM = 0.75     # at/above this the field is clearly on him
+ATTENTION_RISING_NORM = 0.55  # meaningful movement, not yet a stampede
+# Fraction of a projection a maximally hyped player forfeits in the radar score.
+# 0.5 means the single most-added player in the league is ranked as if he were
+# worth half his projection, since you will be paying full market price for him.
+ATTENTION_DISCOUNT = 0.5
 SNAP_TREND_CAP_PCT = 30.0    # a snap-share swing of this many pts = the max bonus
 # Snap share isn't tracked for K/DEF; SOS via fan_pts_allow isn't meaningful for DEF
 SNAP_TREND_ELIGIBLE_POS = {"QB", "RB", "WR", "TE"}
@@ -536,6 +554,52 @@ class GetSnapReportInput(BaseModel):
         description="Number of recent completed weeks to include in the trend (1–10, default 4)"
     )
 
+
+class GetOpportunityReportInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
+    positions: Optional[List[PositionEnum]] = Field(
+        default=None,
+        description="Positions to model (default: QB, RB, WR, TE). E.g. ['RB', 'WR']"
+    )
+    weeks_back: int = Field(
+        default=6, ge=2, le=18,
+        description="Completed weeks to fit the model on (2–18, default 6). More weeks = "
+                    "steadier coefficients but slower to reflect a changed role."
+    )
+    limit: int = Field(
+        default=10, ge=1, le=25,
+        description="Players to show on each side of the report (1–25, default 10)"
+    )
+    min_games: int = Field(
+        default=2, ge=1, le=18,
+        description="Minimum games with opportunity before a player is scored (default 2). "
+                    "Kept low on purpose: a player who just took over a role has few games "
+                    "and is exactly the case worth catching. Raise it to filter noise."
+    )
+    free_agents_only: bool = Field(
+        default=False,
+        description="Restrict to players nobody in the league has rostered. "
+                    "Use this to turn the report into a waiver shopping list."
+    )
+
+
+class GetRadarMoversInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, extra="forbid")
+    since_days: int = Field(
+        default=1, ge=1, le=60,
+        description="How many days back to compare against (1–60, default 1). Falls back to "
+                    "the oldest snapshot on file if history does not reach that far."
+    )
+    positions: Optional[List[PositionEnum]] = Field(
+        default=None,
+        description="Positions to include (default: QB, RB, WR, TE)"
+    )
+    limit: int = Field(
+        default=25, ge=1, le=60,
+        description="Maximum movers to list (1–60, default 25)"
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Tool 1 — get_my_team
 # ─────────────────────────────────────────────────────────────────────────────
@@ -693,6 +757,69 @@ def _snap_trend_bonus_for_player(pid: str, weekly_blobs: Dict[int, Dict[str, Any
     return delta, bonus
 
 
+async def _get_attention() -> Dict[str, Any]:
+    """
+    League-wide add/drop volume plus the normalizer the per-player read needs.
+
+    Replaces the old `player["ownership"]["percentage_owned"]` lookups, which
+    silently returned nothing useful: Sleeper's /players/nfl payload has no
+    ownership key at all, so every one of those reads fell through to its
+    default and every derived number was a constant.
+    """
+    adds, drops = await _parallel_fetch(
+        core_league.get_trending("add"),
+        core_league.get_trending("drop"),
+    )
+    return {
+        "adds": adds,
+        "drops": drops,
+        "log_max": math.log1p(max(adds.values(), default=0)),
+    }
+
+
+def _attention_for(pid: str, attention: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    One player's attention read: {adds, drops, net, norm, label}.
+
+    norm runs 0.0 (nobody is adding him anywhere) to 1.0 (he is the single most
+    added player in the league right now), on a log scale because raw counts are
+    far too skewed to compare linearly. A player missing from the trending list
+    is a true zero — the endpoint returns the top 100, so falling outside it
+    means quiet, not truncated.
+    """
+    adds = attention["adds"].get(pid, 0)
+    drops = attention["drops"].get(pid, 0)
+    log_max = attention["log_max"]
+    norm = (math.log1p(adds) / log_max) if log_max > 0 else 0.0
+
+    if norm >= ATTENTION_HOT_NORM:
+        label = "hot"
+    elif norm >= ATTENTION_RISING_NORM:
+        label = "rising"
+    elif adds > 0:
+        label = "noticed"
+    else:
+        label = "quiet"
+
+    return {"adds": adds, "drops": drops, "net": adds - drops, "norm": norm, "label": label}
+
+
+def _fmt_count(n: int) -> str:
+    """Compact add/drop count for a fixed width column."""
+    if not n:
+        return "—"
+    if n >= 1000:
+        return f"{n / 1000:.1f}k"
+    return str(n)
+
+
+def _fmt_signed_count(n: int) -> str:
+    if not n:
+        return "—"
+    sign = "+" if n > 0 else "-"
+    return f"{sign}{_fmt_count(abs(n))}"
+
+
 async def _compute_composite_scores(candidates: List[tuple], proj: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Rank candidates by composite_score = proj_pts + sos_bonus + snap_trend_bonus,
@@ -790,7 +917,9 @@ async def sleeper_get_available_players(params: GetAvailablePlayersInput) -> str
     Returns:
         str: Markdown table of top available players with rank, name, position,
              NFL team, composite score, raw projected points, SOS matchup rank,
-             snap-share trend, and ownership %.
+             snap-share trend, 24h league-wide add count, and a buzz label
+             (quiet / noticed / rising / hot) showing how much of the field has
+             already moved on him.
 
     Error response:
         "Error: <message>" if the API call fails.
@@ -802,12 +931,15 @@ async def sleeper_get_available_players(params: GetAvailablePlayersInput) -> str
         - "Who are the top 10 available TEs, factoring in schedule and role trend?"
     """
     try:
+        await _maybe_snapshot()
+
         league = await _get_league()
         league_id = league["league_id"]
 
-        taken, players = await _parallel_fetch(
+        taken, players, attention = await _parallel_fetch(
             _get_taken_player_ids(league_id),
             _get_players(),
+            _get_attention(),
         )
 
         pos_filter = _resolve_positions(params.position)
@@ -831,25 +963,28 @@ async def sleeper_get_available_players(params: GetAvailablePlayersInput) -> str
             f"# Top Available {params.position.value} — The Chrysoloras Gang (Full PPR)",
             "*Ranked by composite score: projection + strength of schedule + snap trend*",
             "",
-            f"{'#':<3} {'Player':<22} {'Pos':<4} {'Team':<5} {'Comp':>6} {'Proj':>6} {'SOS':>9} {'Snap Δ':>8} {'Own%':>6}",
-            "─" * 78,
+            f"{'#':<3} {'Player':<22} {'Pos':<4} {'Team':<5} {'Comp':>6} {'Proj':>6} {'SOS':>9} {'Snap Δ':>8} {'Adds':>7}  {'Buzz':<8}",
+            "─" * 88,
         ]
         for rank, r in enumerate(ranked, 1):
             name = _player_display_name(r["player"])[:22]
             team = (r["team"] or "FA")[:4]
-            own_pct = r["player"].get("ownership", {}).get("percentage_owned", 0.0)
+            att = _attention_for(r["pid"], attention)
             sos_str = f"{r['avg_opp_rank']:.0f}/32" if r["avg_opp_rank"] is not None else "—"
             snap_str = f"{r['snap_delta']:+.0f}%" if r["snap_delta"] is not None else "—"
             lines.append(
                 f"{rank:<3} {name:<22} {r['position']:<4} {team:<5} "
-                f"{r['composite']:>6.1f} {r['proj_pts']:>6.1f} {sos_str:>9} {snap_str:>8} {own_pct:>5.1f}%"
+                f"{r['composite']:>6.1f} {r['proj_pts']:>6.1f} {sos_str:>9} {snap_str:>8} "
+                f"{_fmt_count(att['adds']):>7}  {att['label']:<8}"
             )
 
         lines += [
             "",
             "*SOS = avg. matchup rank over next "
             f"{SOS_LOOKAHEAD_WEEKS} weeks (1=easiest/32=hardest). "
-            f"Snap Δ = offensive snap-share change over the last {SNAP_TREND_WEEKS} completed weeks.*",
+            f"Snap Δ = offensive snap-share change over the last {SNAP_TREND_WEEKS} completed weeks. "
+            f"Adds = league-wide pickups in the last {core_config.TRENDING_LOOKBACK_HOURS}h; "
+            "a strong player still marked `quiet` is the one the field has not found yet.*",
         ]
 
         return "\n".join(lines)
@@ -893,15 +1028,22 @@ async def sleeper_get_waiver_recommendations(params: GetWaiverRecommendationsInp
     Returns:
         str: Markdown list of top pickups with name, team, position, composite
              score, raw projected points, SOS matchup rank, snap-share trend,
-             and ownership %.
+             24h league-wide add count, and a buzz label.
+
+    The buzz column does not change the ranking — it prices it. A `quiet`
+    player near the top is likely a cheap claim; a `hot` one will cost real
+    FAAB because the rest of the field is bidding too.
     """
     try:
+        await _maybe_snapshot()
+
         league = await _get_league()
         league_id = league["league_id"]
 
-        taken, players = await _parallel_fetch(
+        taken, players, attention = await _parallel_fetch(
             _get_taken_player_ids(league_id),
             _get_players(),
+            _get_attention(),
         )
 
         positions = (
@@ -929,18 +1071,19 @@ async def sleeper_get_waiver_recommendations(params: GetWaiverRecommendationsInp
             "> **Waivers clear:** Wednesday 1 AM MDT",
             "> **Process:** Wed / Thu / Fri at 8 AM MDT",
             "",
-            f"{'#':<3} {'Player':<22} {'Pos':<4} {'Team':<5} {'Comp':>6} {'Proj':>6} {'SOS':>9} {'Snap Δ':>8} {'Own%':>6}",
-            "─" * 78,
+            f"{'#':<3} {'Player':<22} {'Pos':<4} {'Team':<5} {'Comp':>6} {'Proj':>6} {'SOS':>9} {'Snap Δ':>8} {'Adds':>7}  {'Buzz':<8}",
+            "─" * 88,
         ]
         for rank, r in enumerate(ranked, 1):
             name = _player_display_name(r["player"])[:22]
             team = (r["team"] or "FA")[:4]
-            own_pct = r["player"].get("ownership", {}).get("percentage_owned", 0.0)
+            att = _attention_for(r["pid"], attention)
             sos_str = f"{r['avg_opp_rank']:.0f}/32" if r["avg_opp_rank"] is not None else "—"
             snap_str = f"{r['snap_delta']:+.0f}%" if r["snap_delta"] is not None else "—"
             lines.append(
                 f"{rank:<3} {name:<22} {r['position']:<4} {team:<5} "
-                f"{r['composite']:>6.1f} {r['proj_pts']:>6.1f} {sos_str:>9} {snap_str:>8} {own_pct:>5.1f}%"
+                f"{r['composite']:>6.1f} {r['proj_pts']:>6.1f} {sos_str:>9} {snap_str:>8} "
+                f"{_fmt_count(att['adds']):>7}  {att['label']:<8}"
             )
 
         if not ranked:
@@ -949,7 +1092,9 @@ async def sleeper_get_waiver_recommendations(params: GetWaiverRecommendationsInp
             lines += [
                 "",
                 f"*SOS = avg. matchup rank over next {SOS_LOOKAHEAD_WEEKS} weeks (1=easiest/32=hardest). "
-                f"Snap Δ = offensive snap-share change over the last {SNAP_TREND_WEEKS} completed weeks.*",
+                f"Snap Δ = offensive snap-share change over the last {SNAP_TREND_WEEKS} completed weeks. "
+                f"Adds = league-wide pickups in the last {core_config.TRENDING_LOOKBACK_HOURS}h — "
+                "`quiet` means cheap, `hot` means bid up.*",
             ]
 
         return "\n".join(lines)
@@ -1208,7 +1353,7 @@ def _format_stats_block(stats: Dict[str, Any], position: str) -> List[str]:
 @mcp.tool(
     name="sleeper_get_trade_targets",
     annotations={
-        "title": "Get Trade Targets and Waiver Value Plays",
+        "title": "Get Under-the-Radar Targets",
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": False,
@@ -1216,11 +1361,19 @@ def _format_stats_block(stats: Dict[str, Any], position: str) -> List[str]:
     },
 )
 async def sleeper_get_trade_targets(params: GetTradeTargetsInput) -> str:
-    """Surface undervalued free agents worth targeting on waivers or in trades.
+    """Surface under-the-radar free agents worth targeting on waivers or in trades.
 
-    Identifies players who are producing (or projected to produce) more than
-    their ownership percentage suggests. Sorts by a value score:
-      Value Score = Projected Points ÷ Ownership% (higher = more undervalued).
+    Ranks free agents by production the rest of the field has not priced in yet:
+
+        radar_score = proj_pts × (1 − ATTENTION_DISCOUNT × attention)
+
+    where `attention` is how hard the whole Sleeper player base is adding him
+    right now (log-normalized, 0 = nobody, 1 = the single most added player).
+    A 12-point projection nobody has touched outranks a 15-point projection the
+    entire field is claiming, because you can actually get the first one.
+
+    This is the tool's whole differentiator from sleeper_get_waiver_recommendations,
+    which ranks on production alone and shows attention only as price context.
 
     Players already rostered in the league are excluded. Only players with
     meaningful projected output (> 2 pts) are included.
@@ -1233,7 +1386,8 @@ async def sleeper_get_trade_targets(params: GetTradeTargetsInput) -> str:
 
     Returns:
         str: Markdown table with player name, position, NFL team, projected
-             weekly points, ownership %, and value score.
+             weekly points, 24h add/drop volume, net movement, radar score, and
+             a buzz label.
 
     Example prompts:
         - "Who are my best trade targets?"
@@ -1241,12 +1395,15 @@ async def sleeper_get_trade_targets(params: GetTradeTargetsInput) -> str:
         - "What are the best waiver pickups this week?"
     """
     try:
+        await _maybe_snapshot()
+
         league = await _get_league()
         league_id = league["league_id"]
 
-        taken, players = await _parallel_fetch(
+        taken, players, attention = await _parallel_fetch(
             _get_taken_player_ids(league_id),
             _get_players(),
+            _get_attention(),
         )
 
         positions = ["QB", "RB", "WR", "TE"]
@@ -1266,34 +1423,52 @@ async def sleeper_get_trade_targets(params: GetTradeTargetsInput) -> str:
             pts = calculate_fantasy_points(proj, p.get("position", ""))
             if pts <= 2.0:
                 continue
-            own_pct = max(p.get("ownership", {}).get("percentage_owned", 0.0), 0.1)
-            value = pts / own_pct
-            scored.append((value, pts, pid, p, own_pct))
+            att = _attention_for(pid, attention)
+            # Discount the projection by how much of the field is already on him.
+            # Nobody adding => keeps the full projection; the most-added player in
+            # the league keeps (1 - ATTENTION_DISCOUNT) of it.
+            radar = pts * (1.0 - ATTENTION_DISCOUNT * att["norm"])
+            scored.append((radar, pts, pid, p, att))
 
         scored.sort(key=lambda x: x[0], reverse=True)
         top = scored[: params.limit]
 
         lines = [
-            "# 💡 Trade Targets & Undervalued Adds",
+            "# 💡 Under-the-Radar Targets",
             "*(The Chrysoloras Gang — Free Agents only)*",
             "",
-            "**Value Score** = Projected Pts ÷ Ownership%  (higher → more undervalued)",
+            f"**Radar Score** = Projected Pts × (1 − {ATTENTION_DISCOUNT:g} × attention)  "
+            "(higher → more production the field has not claimed yet)",
             f"**⚠️ Trade deadline: Week 12**",
             "",
-            f"{'#':<3} {'Player':<25} {'Pos':<5} {'Team':<5} {'Proj':>7} {'Own%':>6}  {'Value':>7}",
-            "─" * 62,
+            f"{'#':<3} {'Player':<24} {'Pos':<4} {'Team':<5} {'Proj':>6} {'Adds':>7} {'Drops':>7} {'Net':>7} "
+            f"{'Score':>6}  {'Buzz':<8}",
+            "─" * 88,
         ]
-        for rank, (value, pts, pid, p, own_pct) in enumerate(top, 1):
-            name = _player_display_name(p)[:25]
+        for rank, (radar, pts, pid, p, att) in enumerate(top, 1):
+            name = _player_display_name(p)[:24]
             pos = p.get("position", "?")
             team = (p.get("team") or "FA")[:4]
-            lines.append(f"{rank:<3} {name:<25} {pos:<5} {team:<5} {pts:>7.1f} {own_pct:>5.1f}%  {value:>7.1f}")
+            lines.append(
+                f"{rank:<3} {name:<24} {pos:<4} {team:<5} {pts:>6.1f} "
+                f"{_fmt_count(att['adds']):>7} {_fmt_count(att['drops']):>7} "
+                f"{_fmt_signed_count(att['net']):>7} {radar:>6.1f}  {att['label']:<8}"
+            )
 
         if not top:
             lines.append(
                 "No undervalued players found. Projections may not yet be available "
                 f"for the {CURRENT_SEASON} season — try again once the season begins."
             )
+        else:
+            lines += [
+                "",
+                f"*Adds / Drops = league-wide transactions in the last "
+                f"{core_config.TRENDING_LOOKBACK_HOURS}h. A high projection still labelled "
+                "`quiet` is the real find; a `hot` one is already priced in. A large "
+                "negative Net on a productive player is a buy-low — the field is "
+                "dropping him faster than his role is actually shrinking.*",
+            ]
 
         return "\n".join(lines)
 
@@ -2117,6 +2292,490 @@ async def sleeper_get_draft_best_available(params: GetDraftBestAvailableInput) -
 
     except Exception as exc:
         return _handle_error(exc)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool 14 — get_opportunity_report (expected points vs actual)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool(
+    name="sleeper_get_opportunity_report",
+    annotations={
+        "title": "Get Opportunity Report (Expected vs Actual Points)",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+async def sleeper_get_opportunity_report(params: GetOpportunityReportInput) -> str:
+    """Find players whose production does not match the opportunity they are getting.
+
+    Fantasy points are opportunity times efficiency, and only opportunity is
+    stable week to week — touchdown rate in particular is close to noise over a
+    fantasy season. This tool models the points a player *should* have scored
+    from his carries, targets, air yards, and red zone looks, then subtracts what
+    he actually scored:
+
+        residual = actual - expected
+
+    A large negative residual is the buy signal: he is being fed, the box score
+    has not paid him yet, and the rest of the league prices players off box
+    scores. A large positive residual is the sell signal — he has been finishing
+    everything, and finishing rates do not hold.
+
+    The coefficients are fit by least squares on this season's own player-weeks
+    using this league's scoring rules, not borrowed from a generic table. That
+    matters here: this league pays 0.2 per carry and stacks milestone bonuses,
+    so any external points-per-touch average would be wrong.
+
+    Args:
+        params (GetOpportunityReportInput):
+            - positions (List[PositionEnum]): Positions to model (default QB/RB/WR/TE)
+            - weeks_back (int): Completed weeks to fit on (2–18, default 6)
+            - limit (int): Players per side of the report (1–25, default 10)
+            - free_agents_only (bool): Restrict to unrostered players, turning
+              the report into a waiver shopping list
+
+    Returns:
+        str: Two markdown tables — buy-low candidates (underperforming their
+             opportunity) and sell-high candidates (outrunning it) — with
+             per-game actual, expected, residual, the raw opportunity behind the
+             expectation, and how hard the field is currently adding the player.
+
+    Example prompts:
+        - "Who's been unlucky? Show me the opportunity report"
+        - "Which of my players are due to regress?"
+        - "Find me free agents whose usage says they're about to break out"
+    """
+    try:
+        await _maybe_snapshot()
+
+        requested = (
+            [p.value for p in params.positions]
+            if params.positions
+            else ["QB", "RB", "WR", "TE"]
+        )
+        # Kickers and defenses have no opportunity stats to model from, and FLEX
+        # is a lineup slot rather than a position. Say so instead of returning an
+        # empty report that reads like a data outage.
+        positions = [p for p in requested if p in core_opportunity.FEATURES]
+        skipped = [p for p in requested if p not in core_opportunity.FEATURES]
+        if not positions:
+            return (
+                "# 📊 Opportunity Report\n\n"
+                f"*No modelable positions requested. {', '.join(skipped)} "
+                f"{'have' if len(skipped) > 1 else 'has'} no opportunity stats to model — "
+                f"this report covers {', '.join(sorted(core_opportunity.FEATURES))}.*"
+            )
+
+        weeks, season = await _completed_stat_weeks(params.weeks_back)
+
+        players, attention = await _parallel_fetch(_get_players(), _get_attention())
+        weekly_blobs = dict(zip(
+            weeks,
+            await _parallel_fetch(*[_get_weekly_stats(season, w) for w in weeks]),
+        ))
+
+        rows, models = core_opportunity.build_report(
+            weekly_blobs, players, calculate_fantasy_points,
+            positions=positions, min_games=params.min_games,
+        )
+
+        if not models:
+            return (
+                "# 📊 Opportunity Report\n\n"
+                f"*Not enough completed-game data in {season} weeks {weeks[0]}–{weeks[-1]} "
+                "to fit an opportunity model. Try again once a few games have been played, "
+                "or raise weeks_back.*"
+            )
+
+        if params.free_agents_only:
+            league = await _get_league()
+            taken = await _get_taken_player_ids(league["league_id"])
+            rows = [r for r in rows if r["pid"] not in taken]
+
+        if not rows:
+            return "# 📊 Opportunity Report\n\n*No players cleared the volume threshold.*"
+
+        buys = rows[: params.limit]
+        sells = rows[::-1][: params.limit]
+
+        def table(title: str, subtitle: str, entries: List[Dict[str, Any]]) -> List[str]:
+            out = [
+                f"## {title}",
+                f"*{subtitle}*",
+                "",
+                f"{'#':<3} {'Player':<22} {'Pos':<4} {'Team':<5} {'Actual':>7} {'xFP':>7} "
+                f"{'Diff':>7} {'Gm':>3}  {'Opportunity / game':<30} {'Buzz':<8}",
+                "─" * 108,
+            ]
+            for rank, r in enumerate(entries, 1):
+                att = _attention_for(r["pid"], attention)
+                opp = "  ".join(
+                    f"{_OPP_LABELS.get(f, f)} {v:.1f}"
+                    for f, v in r["opportunity_per_game"].items()
+                )
+                out.append(
+                    f"{rank:<3} {_player_display_name(r['player'])[:22]:<22} {r['position']:<4} "
+                    f"{(r['team'] or 'FA')[:4]:<5} {r['actual_per_game']:>7.1f} "
+                    f"{r['expected_per_game']:>7.1f} {r['residual_per_game']:>+7.1f} "
+                    f"{r['games']:>3}  {opp[:30]:<30} {att['label']:<8}"
+                )
+            out.append("")
+            return out
+
+        fit_note = ", ".join(f"{pos} n={m['rows']}" for pos, m in sorted(models.items()))
+        lines = [
+            "# 📊 Opportunity Report — Expected vs Actual",
+            f"*{season} weeks {weeks[0]}–{weeks[-1]}"
+            + (" · free agents only" if params.free_agents_only else "")
+            + (f" · skipped {', '.join(skipped)} (no opportunity stats)" if skipped else "")
+            + "*",
+            "",
+        ]
+        lines += table(
+            "🟢 Buy low — earning more than they are scoring",
+            "Opportunity is there, the points have not followed. Historically the "
+            "gap closes toward the opportunity, not away from it.",
+            buys,
+        )
+        lines += table(
+            "🔴 Sell high — scoring more than they are earning",
+            "Producing well beyond their usage. Trade them while the box score "
+            "still says they are elite.",
+            sells,
+        )
+        lines += [
+            f"*Model fit by least squares on {len(weeks)} weeks of this season's player-weeks "
+            f"using this league's scoring ({fit_note}). Diff = actual − expected, per game. "
+            "Opportunity abbreviations: att=attempts, tgt=targets, rz=red zone, air=air yards. "
+            "A negative Diff on a `quiet` player is the highest-value case here — real usage, "
+            "no points yet, and nobody bidding.*",
+        ]
+        return "\n".join(lines)
+
+    except Exception as exc:
+        return _handle_error(exc)
+
+
+# Compact column labels for the opportunity features.
+_OPP_LABELS = {
+    "pass_att": "pass",
+    "pass_rz_att": "rz-pass",
+    "rush_att": "att",
+    "rush_rz_att": "rz-att",
+    "rec_tgt": "tgt",
+    "rec_rz_tgt": "rz-tgt",
+    "rec_air_yd": "air",
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Snapshot capture — the history the Sleeper API does not keep for you
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Checked once per process. An MCP server is short lived, so this is a guard
+# against re-hitting SQLite on every tool call within one session, not a
+# substitute for the durable "did we already write today" check.
+_snapshot_checked_this_process = False
+
+
+async def _maybe_snapshot() -> None:
+    """
+    Write today's snapshot if it has not been written yet.
+
+    Called at the top of the tools that already need this data anyway, so the
+    marginal cost is a few thousand SQLite inserts against blobs that are
+    already cached. Every failure is swallowed: a read only tool must never
+    break because a local history file could not be written.
+    """
+    global _snapshot_checked_this_process
+    if _snapshot_checked_this_process:
+        return
+    _snapshot_checked_this_process = True
+
+    try:
+        if await asyncio.to_thread(snapshots.captured_today):
+            return
+
+        players, adds, drops = await _parallel_fetch(
+            _get_players(),
+            core_league.get_trending("add"),
+            core_league.get_trending("drop"),
+        )
+
+        rosters, league_id = None, None
+        try:
+            league = await _get_league()
+            league_id = league["league_id"]
+            rosters = await core_league.get_rosters(league_id)
+        except Exception:
+            # Identity may not be configured yet. Player and trending history is
+            # still worth keeping without it.
+            pass
+
+        await asyncio.to_thread(
+            snapshots.capture, players, {"add": adds, "drop": drops}, rosters, league_id
+        )
+    except Exception:
+        pass
+
+
+async def _completed_stat_weeks(weeks_back: int) -> tuple:
+    """
+    (weeks, season) covering the most recent completed weeks.
+
+    Mirrors the fallback the snap report uses: before Week 2 of a regular season
+    there is nothing current to look at, so drop back to the end of the last
+    completed season rather than reporting on an empty slate.
+    """
+    season_type, current_week, season = await _get_current_week()
+    if season_type == "regular" and current_week > 1:
+        end_week = current_week - 1
+        return list(range(max(1, end_week - weeks_back + 1), end_week + 1)), season
+    return list(range(max(1, 18 - weeks_back + 1), 19)), STATS_SEASON
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool 15 — get_radar_movers (what changed since the last snapshot)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Ordered most to least actionable. A depth chart promotion is a role change you
+# can act on before any box score reflects it; a starter missing practice is the
+# same signal one step removed, since it promotes whoever is behind him.
+_MOVER_PRIORITY = {
+    "depth_chart_order": 0,
+    "practice_participation": 1,
+    "injury_status": 2,
+    "team": 3,
+    "status": 4,
+}
+
+_DNP_MARKERS = ("did not", "dnp", "out")
+
+
+def _describe_change(change: Dict[str, Any]) -> str:
+    field, old, new = change["field"], change["old"], change["new"]
+    if field == "depth_chart_order":
+        old_s = old if old is not None else "—"
+        new_s = new if new is not None else "—"
+        arrow = "↑" if (old or 99) > (new or 99) else "↓"
+        return f"{arrow} depth {old_s}→{new_s}"
+    if field == "practice_participation":
+        return f"practice {old or '—'}→{new or '—'}"
+    if field == "injury_status":
+        return f"injury {old or 'healthy'}→{new or 'healthy'}"
+    if field == "team":
+        return f"team {old or 'FA'}→{new or 'FA'}"
+    return f"{field} {old or '—'}→{new or '—'}"
+
+
+@mcp.tool(
+    name="sleeper_get_radar_movers",
+    annotations={
+        "title": "Get Radar Movers (Role and Status Changes)",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+async def sleeper_get_radar_movers(params: GetRadarMoversInput) -> str:
+    """Show what changed since the last snapshot: depth chart, injury, practice, roster.
+
+    Sleeper's API has no history — every endpoint returns only the current
+    state — so this server writes a small daily snapshot of depth charts, injury
+    and practice status, trending add/drop volume, and league rosters. This tool
+    reads the difference between two of those snapshots.
+
+    The changes it surfaces are the earliest signals available anywhere:
+
+      - A back moving from third on the depth chart to second, days before any
+        box score shows it
+      - A starter dropping to DNP in practice, which promotes whoever is behind
+        him for the weekend
+      - Productive players dropped across your league while their role is
+        actually improving
+
+    None of this is recoverable after the fact. History only exists from the
+    first day a snapshot was taken, so early runs will have little to compare
+    against and the tool will say so.
+
+    Args:
+        params (GetRadarMoversInput):
+            - since_days (int): Days back to compare against (1–60, default 1)
+            - positions (List[PositionEnum]): Positions to include (default QB/RB/WR/TE)
+            - limit (int): Maximum movers to list (1–60, default 25)
+
+    Returns:
+        str: Markdown list of changed players ordered by how actionable the
+             change is, plus adds and drops in your league over the same window.
+
+    Example prompts:
+        - "What changed on the depth charts this week?"
+        - "Who moved up since yesterday?"
+        - "Did anyone get dropped in my league that I should grab?"
+    """
+    try:
+        await _maybe_snapshot()
+
+        positions = (
+            [p.value for p in params.positions]
+            if params.positions
+            else ["QB", "RB", "WR", "TE"]
+        )
+
+        dates = await asyncio.to_thread(snapshots.snapshot_dates)
+        if len(dates) < 2:
+            captured = dates[0] if dates else "nothing yet"
+            return (
+                "# 🛰️ Radar Movers\n\n"
+                f"*Only {len(dates)} snapshot on file ({captured}), so there is nothing to "
+                "compare against yet.*\n\n"
+                "Sleeper's API returns only current state — no history — so this server "
+                "records its own daily snapshot whenever a radar tool runs. Come back "
+                "tomorrow and this will start showing depth chart moves, practice "
+                "downgrades, and league drops. Running any radar tool once a day (or "
+                "scheduling it) is what builds the history."
+            )
+
+        target = (date.today() - timedelta(days=params.since_days)).isoformat()
+        earlier = [d for d in dates[:-1] if d <= target]
+        from_date = earlier[-1] if earlier else dates[0]
+        to_date = dates[-1]
+
+        movers, players = await _parallel_fetch(
+            asyncio.to_thread(snapshots.diff_players, from_date, to_date, positions),
+            _get_players(),
+        )
+
+        def sort_key(m: Dict[str, Any]) -> tuple:
+            return min(_MOVER_PRIORITY.get(c["field"], 9) for c in m["changes"])
+
+        movers.sort(key=sort_key)
+
+        lines = [
+            "# 🛰️ Radar Movers",
+            f"*Changes between {from_date} and {to_date} · {len(dates)} snapshots on file*",
+            "",
+        ]
+
+        if not movers:
+            lines.append("*No depth chart, injury, practice, or team changes in this window.*")
+        else:
+            lines.append(f"## Role & status changes ({len(movers)} found)")
+            lines.append("")
+            for m in movers[: params.limit]:
+                player = players.get(m["player_id"], {})
+                name = _player_display_name(player) or m["player_id"]
+                detail = " · ".join(_describe_change(c) for c in m["changes"])
+                lines.append(
+                    f"- **{name}** ({m['position']}, {m['team'] or 'FA'}) — {detail}"
+                )
+            if len(movers) > params.limit:
+                lines.append(f"- *…and {len(movers) - params.limit} more*")
+            lines.append("")
+
+        # League roster churn over the same window.
+        try:
+            league = await _get_league()
+            moves = await asyncio.to_thread(
+                snapshots.roster_changes, league["league_id"], from_date, to_date
+            )
+            for label, key, note in (
+                ("Added in your league", "added", "someone else saw something"),
+                ("Dropped in your league", "dropped", "free talent, check their usage before the field does"),
+            ):
+                ids = moves.get(key, [])
+                if not ids:
+                    continue
+                shown = [
+                    _player_display_name(players.get(pid, {})) or pid
+                    for pid in ids
+                    if (players.get(pid, {}) or {}).get("position") in positions
+                ]
+                if shown:
+                    lines.append(f"## {label} — *{note}*")
+                    lines.append(", ".join(shown[: params.limit]))
+                    lines.append("")
+        except Exception:
+            pass  # league identity is optional here; the role changes still stand
+
+        return "\n".join(lines)
+
+    except Exception as exc:
+        return _handle_error(exc)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool 16 — capture_snapshot (explicit history write)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@mcp.tool(
+    name="sleeper_capture_snapshot",
+    annotations={
+        "title": "Capture Daily Snapshot",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+async def sleeper_capture_snapshot() -> str:
+    """Write today's snapshot of depth charts, injuries, trending volume, and rosters.
+
+    The radar tools already do this automatically once a day, so calling this
+    directly is only needed to force a fresh capture — for example after news
+    breaks, or from a scheduled job that keeps history accumulating on days you
+    do not open the tools.
+
+    Writing twice in one day replaces that day's rows rather than duplicating
+    them, so this is safe to call as often as you like. The last write of the
+    day is the one kept.
+
+    Returns:
+        str: Row counts written and the full snapshot history on file.
+
+    Example prompts:
+        - "Take a snapshot now"
+        - "Record today's depth charts"
+    """
+    try:
+        players, adds, drops = await _parallel_fetch(
+            _get_players(),
+            core_league.get_trending("add"),
+            core_league.get_trending("drop"),
+        )
+
+        rosters, league_id, league_note = None, None, "no league configured"
+        try:
+            league = await _get_league()
+            league_id = league["league_id"]
+            rosters = await core_league.get_rosters(league_id)
+            league_note = league.get("name") or league_id
+        except Exception:
+            pass
+
+        written = await asyncio.to_thread(
+            snapshots.capture, players, {"add": adds, "drop": drops}, rosters, league_id
+        )
+        dates = await asyncio.to_thread(snapshots.snapshot_dates)
+
+        return "\n".join([
+            f"# 📸 Snapshot captured — {snapshots.today()}",
+            "",
+            f"- **{written['players']:,}** players (depth chart, injury, practice, status)",
+            f"- **{written['trending']:,}** trending add/drop rows",
+            f"- **{written['rosters']:,}** roster slots ({league_note})",
+            "",
+            f"*{len(dates)} day(s) of history on file"
+            + (f", {dates[0]} → {dates[-1]}" if dates else "")
+            + f". Stored at `{snapshots.db_path()}`.*",
+        ])
+
+    except Exception as exc:
+        return _handle_error(exc)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Async utilities

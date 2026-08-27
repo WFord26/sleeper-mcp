@@ -1284,6 +1284,7 @@ dev = [
     { name = "pytest-asyncio" },
 ]
 web = [
+    { name = "python-dotenv" },
     { name = "starlette" },
     { name = "uvicorn" },
 ]
@@ -1295,6 +1296,7 @@ requires-dist = [
     { name = "pydantic" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
+    { name = "python-dotenv", marker = "extra == 'web'" },
     { name = "starlette", marker = "extra == 'web'" },
     { name = "uvicorn", marker = "extra == 'web'" },
 ]

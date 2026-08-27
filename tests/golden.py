@@ -38,6 +38,8 @@ CASES = [
     ("sleeper_get_weather_report", {"player_name": "Bijan Robinson"}),
     ("sleeper_get_snap_report", {"player_name": "Bijan Robinson", "weeks_back": 4}),
     ("sleeper_get_draft_best_available", {"limit": 10}),
+    ("sleeper_get_opportunity_report", {"positions": ["RB", "WR"], "limit": 5}),
+    ("sleeper_get_radar_movers", {"limit": 10}),
 ]
 
 

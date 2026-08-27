@@ -127,6 +127,52 @@ async def get_players() -> Dict[str, Any]:
     return data
 
 
+async def get_trending(
+    kind: str = "add",
+    *,
+    lookback_hours: Optional[int] = None,
+    limit: Optional[int] = None,
+) -> Dict[str, int]:
+    """
+    League-wide add or drop volume, as {player_id: transaction_count}.
+
+    This is the closest thing Sleeper exposes to an ownership signal, and it is
+    the better one: it measures how fast the field is moving on a player rather
+    than where the field already sits. A player at a flat 40% rostered is less
+    of a threat to your waiver claim than one at 15% climbing hard, and only
+    this endpoint can tell the two apart.
+
+    Note the endpoint truncates to 100 players regardless of the requested
+    limit, so callers should read a missing player_id as zero — genuinely quiet,
+    not merely cut off. That distinction is what makes this usable as an
+    "under the radar" filter.
+
+    kind: "add" or "drop".
+    """
+    if kind not in ("add", "drop"):
+        raise ValueError(f"trending kind must be 'add' or 'drop', got {kind!r}")
+
+    hours = config.TRENDING_LOOKBACK_HOURS if lookback_hours is None else lookback_hours
+    cap = config.TRENDING_LIMIT if limit is None else limit
+
+    async def fetch() -> Dict[str, int]:
+        rows = await client.sleeper_get(
+            f"/players/nfl/trending/{kind}",
+            {"lookback_hours": hours, "limit": cap},
+        )
+        return {
+            row["player_id"]: row.get("count", 0)
+            for row in (rows or [])
+            if row.get("player_id")
+        }
+
+    return await cache.memory.get_or_fetch(
+        f"trending:{kind}:{hours}:{cap}",
+        fetch,
+        config.TTL_TRENDING,
+    )
+
+
 async def get_matchups(
     week: int,
     league_id: Optional[str] = None,

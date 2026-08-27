@@ -138,7 +138,10 @@ Fully quit (Cmd-Q) and relaunch Claude Desktop after saving — it only reads th
 | `sleeper_get_waiver_recommendations` | Best waiver wire / FA pickups this week |
 | `sleeper_get_league_standings` | Full standings with playoff picture |
 | `sleeper_get_player_stats` | Season stats + projections for any named player |
-| `sleeper_get_trade_targets` | Undervalued free agents (projected pts ÷ ownership%) |
+| `sleeper_get_trade_targets` | Under-the-radar free agents (projection discounted by how hard the field is already adding him) |
+| `sleeper_get_opportunity_report` | Expected points from opportunity vs. actual — buy-low and sell-high candidates, coefficients fit on this season with this league's scoring |
+| `sleeper_get_radar_movers` | Depth chart, injury, practice, and league-roster changes since the last daily snapshot |
+| `sleeper_capture_snapshot` | Force a snapshot of depth charts, injuries, trending volume, and rosters |
 | `sleeper_get_optimal_lineup` | Computes your best possible lineup this week and flags swaps vs. your current starters |
 | `sleeper_get_injury_report` | Scans your roster for Questionable/Doubtful/Out/IR designations |
 | `sleeper_get_bye_week_report` | Maps every roster player's bye week (from the real NFL schedule) and flags collisions |
@@ -226,6 +229,8 @@ cp .env.example .env
 | `SLEEPER_WEB_PORT` | `8080` | Dashboard port |
 | `SLEEPER_POLL_LIVE` | `30` | Poll seconds during games |
 | `SLEEPER_POLL_IDLE` | `900` | Poll seconds otherwise |
+| `SLEEPER_TRENDING_LOOKBACK` | `24` | Hours of add/drop volume behind the buzz signal |
+| `SLEEPER_CACHE_DIR` | `~/.cache/sleeper-mcp` | Player cache **and** the daily snapshot database |
 
 You can also change username and league **at runtime** without restarting the server, using the MCP tools:
 

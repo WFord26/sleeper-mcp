@@ -73,6 +73,15 @@ TTL_MATCHUPS_FINAL = None    # completed weeks are immutable, cache forever
 TTL_STATS = 10 * 60
 TTL_PROJECTIONS = 60 * 60
 TTL_SCHEDULE = 24 * 60 * 60
+TTL_TRENDING = 30 * 60       # add/drop velocity; meaningful movement is hourly
+
+# ── Trending ("who is the field already on?") ───────────────────────────────
+# Sleeper's /players/nfl/trending endpoint caps its response at 100 players no
+# matter what limit is requested, so a player absent from the list is genuinely
+# quiet rather than merely truncated. That is the signal we want: everyone in
+# the list is on the radar, everyone outside it is not.
+TRENDING_LOOKBACK_HOURS = int(os.getenv("SLEEPER_TRENDING_LOOKBACK", "24"))
+TRENDING_LIMIT = 100
 
 # ── Disk cache ──────────────────────────────────────────────────────────────
 CACHE_DIR = Path(os.getenv("SLEEPER_CACHE_DIR", Path.home() / ".cache" / "sleeper-mcp"))
