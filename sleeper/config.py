@@ -79,6 +79,9 @@ TTL_TRENDING = 30 * 60       # add/drop velocity; meaningful movement is hourly
 TTL_TRANSACTIONS_LIVE = 10 * 60   # the current week is still being written
 TTL_TRANSACTIONS_FINAL = None     # a settled week never changes again
 TTL_ODDS = 15 * 60           # lines move, but not faster than this matters to us
+TTL_DRAFT = 30              # the draft header (order, settings); picks fetched raw while live
+TTL_DRAFT_PICKS_FINAL = None  # a completed draft's pick list is immutable
+TTL_DRAFT_ADP = 6 * 60 * 60   # preseason ADP barely moves day to day
 
 # ── Trending ("who is the field already on?") ───────────────────────────────
 # Sleeper's /players/nfl/trending endpoint caps its response at 100 players no
@@ -94,6 +97,7 @@ CACHE_DIR = Path(os.getenv("SLEEPER_CACHE_DIR", Path.home() / ".cache" / "sleepe
 # ── Dashboard polling ───────────────────────────────────────────────────────
 POLL_INTERVAL_LIVE = int(os.getenv("SLEEPER_POLL_LIVE", "30"))     # during games
 POLL_INTERVAL_IDLE = int(os.getenv("SLEEPER_POLL_IDLE", "900"))    # otherwise
+POLL_INTERVAL_DRAFT = int(os.getenv("SLEEPER_POLL_DRAFT", "12"))   # while a draft is live
 
 WEB_HOST = os.getenv("SLEEPER_WEB_HOST", "127.0.0.1")
 WEB_PORT = int(os.getenv("SLEEPER_WEB_PORT", "8080"))

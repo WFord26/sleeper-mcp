@@ -55,7 +55,7 @@
   .card .value { font-size: 19px; margin-top: 12px; line-height: 1.2; }
   .card .note { font-size: 14px; margin-top: 8px; color: var(--muted); }
 
-  .tabs { display: flex; gap: 8px; margin: 0; }
+  .tabs { display: flex; gap: 8px; margin: 0; flex-wrap: wrap; }
   .tab {
     font-family: var(--pixel); font-size: 9px; letter-spacing: .06em;
     padding: 12px 16px; border: 0; background: var(--surface); color: var(--dim); cursor: pointer;
@@ -97,6 +97,10 @@
   .luck span { font-size: 13px; margin-left: 8px; min-width: 56px; text-align: right; }
   th.luck-h, td.luck-c { text-align: center; }
 
+  /* The standings are wider than a phone. Scroll the table rather than the
+     page, so the tabs and cards above stay put. */
+  .table-wrap { overflow-x: auto; }
+  .table-wrap table { min-width: 720px; }
   .grid-wrap { overflow-x: auto; background: var(--surface); padding: 4px; }
   table.grid td, table.grid th { text-align: center; padding: 5px 4px; white-space: nowrap; }
   table.grid th { font-family: var(--pixel); font-size: 8px; padding: 10px 4px; cursor: default; }
@@ -131,7 +135,7 @@
   .segs i.on { background: var(--win); }
   td.segs-c { text-align: right; }
 
-  .weeks-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+  .weeks-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 16px 0 18px; }
   .weeks-bar > span { font-family: var(--pixel); font-size: 13px; color: var(--accent); }
   .chips { display: flex; gap: 4px; flex-wrap: wrap; }
   .chip {
@@ -141,6 +145,63 @@
   .chip:hover { color: var(--text); }
   .chip.on { background: var(--accent); color: var(--bg); }
   .wsummary { margin-left: auto; font-size: 14px; color: var(--dim); }
+
+  /* matchups: this week's head to head pairings */
+  .mu { background: var(--surface); margin-bottom: 12px; border-left: 4px solid transparent; }
+  .mu.mine { border-left-color: var(--accent); }
+  .mu-head {
+    display: grid; grid-template-columns: 1fr 120px 1fr; align-items: center; gap: 16px;
+    padding: 16px 18px; cursor: pointer; width: 100%; border: 0; background: none;
+    color: inherit; font: inherit; text-align: left;
+  }
+  .mu-head:hover { background: var(--surface-2); }
+  .mu-side { min-width: 0; }
+  .mu-side.r { text-align: right; }
+  .mu-side .team { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mu-score { font-family: var(--pixel); font-size: 18px; margin-top: 8px; color: var(--text); }
+  .mu-side.won .mu-score { color: var(--win); }
+  .mu-side.lost .team, .mu-side.lost .mu-score { color: var(--dim); }
+  .mu-tag { font-family: var(--pixel); font-size: 8px; color: var(--bg); background: var(--win); padding: 4px 6px; margin: 0 8px; vertical-align: middle; }
+  .pips { display: flex; gap: 2px; margin-top: 10px; align-items: center; }
+  .mu-side.r .pips { justify-content: flex-end; }
+  .pips i { width: 9px; height: 12px; background: var(--border); display: block; }
+  .pips i.post, .pips i.bye { background: var(--accent); }
+  .pips i.in { background: var(--warn); animation: blink 1s steps(1, end) infinite; }
+  .pips span { font-size: 12px; color: var(--dim); margin: 0 8px; }
+  .mu-mid { text-align: center; }
+  .badge { display: inline-block; font-family: var(--pixel); font-size: 8px; letter-spacing: .08em; padding: 7px 9px; background: var(--border); color: var(--muted); }
+  .badge.final { background: var(--win); color: var(--bg); }
+  .badge.live { background: var(--warn); color: var(--bg); }
+  .mu-mid .by { font-size: 12px; color: var(--dim); margin-top: 8px; }
+  .mu-body { display: none; padding: 0 18px 16px; }
+  .mu.open .mu-body { display: block; }
+  table.lineup td { padding: 6px 8px; font-size: 13px; border-top: 1px solid var(--border); text-align: left; }
+  table.lineup td.slot { text-align: center; width: 64px; font-family: var(--pixel); font-size: 7px; color: var(--dim); }
+  table.lineup td.pts { width: 64px; text-align: right; color: var(--text); }
+  table.lineup td.pts.l { text-align: left; }
+  table.lineup td.pl.r { text-align: right; }
+  table.lineup .sub { color: var(--dim); font-size: 11px; margin: 0 6px; }
+  table.lineup .st { display: inline-block; width: 8px; height: 8px; background: var(--border); margin: 0 6px; }
+  table.lineup .st.post, table.lineup .st.bye { background: var(--accent); }
+  table.lineup .st.in { background: var(--warn); }
+  @media (max-width: 640px) {
+    .mu-head { grid-template-columns: 1fr 76px 1fr; gap: 8px; padding: 14px 10px; }
+    .mu-score { font-size: 13px; }
+    .pips i { width: 6px; }
+    table.lineup .sub { display: none; }
+    .mu-body { padding: 0 6px 12px; overflow-x: auto; }
+    table.lineup td { padding: 6px 3px; font-size: 11px; }
+    table.lineup td.slot { width: 36px; }
+    table.lineup td.pts { width: 46px; }
+    table.lineup .st { margin: 0 4px; }
+  }
+
+  .warn-bar {
+    display: flex; gap: 12px; align-items: flex-start; margin-bottom: 16px;
+    background: var(--surface); border-left: 4px solid var(--warn); padding: 12px 16px;
+    font-family: ui-sans-serif, system-ui, sans-serif; font-size: 13px; color: #c8c8e0;
+  }
+  .warn-bar b { font-family: var(--pixel); font-size: 8px; color: var(--warn); letter-spacing: .08em; white-space: nowrap; padding-top: 3px; }
 
   .legend {
     color: #8a8aa8; font-size: 13px; line-height: 1.6; margin: 18px 0 0; max-width: 780px;
@@ -152,6 +213,66 @@
   .key i { width: 12px; height: 12px; display: block; }
   .key i.bar { width: 24px; height: 4px; }
   .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+
+  /* draft board */
+  .draft-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 18px; margin-bottom: 18px; }
+  .draft-head .oc {
+    font-family: var(--pixel); font-size: 11px; color: var(--bg);
+    background: var(--warn); padding: 9px 12px; line-height: 1.5;
+  }
+  .draft-head .oc.pre { background: var(--accent); }
+  .draft-head .oc.done { background: var(--win); }
+  .draft-head .meta { font-size: 13px; color: var(--muted); }
+  .draft-head .bar { flex-basis: 100%; height: 8px; background: var(--border); margin-top: 4px; }
+  .draft-head .bar i { display: block; height: 100%; background: var(--accent); }
+
+  .draft-layout { display: flex; gap: 18px; align-items: flex-start; }
+  .board-wrap { overflow-x: auto; background: var(--surface); padding: 4px; flex: 1; min-width: 0; }
+  table.board { border-collapse: collapse; width: 100%; }
+  table.board th, table.board td {
+    padding: 4px 6px; text-align: left; white-space: nowrap;
+    border: 1px solid var(--bg); vertical-align: top;
+  }
+  table.board th {
+    font-family: var(--pixel); font-size: 7px; letter-spacing: .03em; color: var(--muted);
+    background: #101024; max-width: 96px; overflow: hidden; text-overflow: ellipsis;
+  }
+  table.board th.rnd { text-align: center; color: var(--dim); white-space: nowrap; }
+  table.board th.rnd .dir { color: var(--accent); margin-left: 4px; }
+  table.board td { background: #101024; font-size: 12px; min-width: 92px; }
+  table.board td.empty-cell { color: #3a3a5c; font-family: var(--pixel); font-size: 8px; }
+  table.board td.on { background: var(--warn); }
+  table.board td.on .pn, table.board td.on .nm, table.board td.on .pt { color: var(--bg); }
+  table.board td .pn { font-family: var(--pixel); font-size: 7px; color: var(--dim); }
+  table.board td .nm { color: var(--text); line-height: 1.3; margin-top: 2px; white-space: normal; }
+  table.board td .pt { color: var(--muted); font-size: 11px; }
+  table.board td.pos-QB { border-left: 3px solid var(--loss); }
+  table.board td.pos-RB { border-left: 3px solid var(--win); }
+  table.board td.pos-WR { border-left: 3px solid var(--accent); }
+  table.board td.pos-TE { border-left: 3px solid var(--warn); }
+  table.board td.pos-K  { border-left: 3px solid var(--muted); }
+  table.board td.pos-DEF { border-left: 3px solid #b060f0; }
+
+  .best { width: 292px; flex-shrink: 0; background: var(--surface); padding: 10px 12px; }
+  .best h4 {
+    font-family: var(--pixel); font-size: 9px; color: var(--muted); font-weight: 400;
+    letter-spacing: .06em; margin: 2px 0 10px;
+  }
+  .best ol { list-style: none; margin: 0; padding: 0; }
+  .best li {
+    display: flex; align-items: baseline; gap: 8px; padding: 5px 0;
+    border-bottom: 1px solid var(--border); font-size: 13px;
+  }
+  .best li:last-child { border-bottom: 0; }
+  .best li .r { font-family: var(--pixel); font-size: 8px; color: var(--dim); min-width: 20px; }
+  .best li .bi { flex: 1; min-width: 0; }
+  .best li .n { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .best li .pr { color: var(--muted); font-size: 11px; }
+  .best li .ad { color: var(--accent); font-size: 12px; min-width: 34px; text-align: right; }
+  @media (max-width: 880px) {
+    .draft-layout { flex-direction: column; }
+    .best { width: 100%; box-sizing: border-box; }
+  }
 </style>
 </head>
 <body>
@@ -168,17 +289,20 @@
 
   <div class="tabs">
     <button class="tab on" data-panel="standings">STANDINGS</button>
+    <button class="tab" data-panel="matchups">MATCHUPS</button>
     <button class="tab" data-panel="grid">H2H GRID</button>
     <button class="tab" data-panel="weeks">BY WEEK</button>
+    <button class="tab" data-panel="draft" style="display:none">DRAFT</button>
   </div>
 
   <div class="panel on" id="panel-standings">
-    <table id="standings">
+    <div class="table-wrap"><table id="standings">
       <thead>
         <tr>
-          <th data-sort="all_play_rank">#</th>
+          <th data-sort="rank">#</th>
           <th data-sort="team_name">TEAM</th>
           <th data-sort="real_pct">REAL</th>
+          <th data-sort="real_points_for">PTS FOR</th>
           <th data-sort="all_play_pct">ALLPLAY</th>
           <th data-sort="all_play_pct">AP%</th>
           <th data-sort="luck" class="luck-h">LUCK</th>
@@ -188,12 +312,34 @@
         </tr>
       </thead>
       <tbody></tbody>
-    </table>
+    </table></div>
     <p class="legend">
+      Ranked by real record, then points scored. A week only counts once every
+      starter has finished playing.
       All play record scores each team against every other team, every week.
       Luck is real win% minus all play win%. Green blocks right of centre: the
       schedule has been kind. Red blocks left: this team is losing games it
       scored well enough to win.
+    </p>
+  </div>
+
+  <div class="panel" id="panel-matchups">
+    <div class="weeks-bar">
+      <span>WEEK</span>
+      <div class="chips" id="mu-chips"></div>
+      <span class="wsummary" id="mu-summary"></span>
+    </div>
+    <div id="mu-warn"></div>
+    <div id="mu-list"></div>
+    <div class="key">
+      <span><i style="background:#3cbcfc"></i>starter finished</span>
+      <span><i style="background:#fcd800"></i>playing now</span>
+      <span><i style="background:#24244a"></i>yet to play</span>
+    </div>
+    <p class="legend">
+      One block per starter. A pairing has no winner until every starter on both
+      sides has finished, and only then does it reach the standings. Click a
+      pairing to see both lineups.
     </p>
   </div>
 
@@ -213,29 +359,39 @@
       <div class="chips" id="week-chips"></div>
       <span class="wsummary" id="week-summary"></span>
     </div>
-    <table id="weekly"><thead><tr>
+    <div class="table-wrap"><table id="weekly"><thead><tr>
       <th>#</th><th>TEAM</th><th>POINTS</th><th style="text-align:right">BEAT</th>
-    </tr></thead><tbody></tbody></table>
+    </tr></thead><tbody></tbody></table></div>
     <p class="legend">
       Right-hand meter: one segment per phantom opponent that week — lit for each
       team you outscored, dark for each you didn't.
+    </p>
+  </div>
+
+  <div class="panel" id="panel-draft">
+    <div class="draft-head" id="draft-head"></div>
+    <div class="draft-layout">
+      <div class="board-wrap"><table class="board" id="draft-board"></table></div>
+      <div class="best" id="draft-best"></div>
+    </div>
+    <p class="legend">
+      Fills in live as picks are made. The lit cell is on the clock; the arrow by
+      each round number shows that round's snake direction. Best available is
+      ranked by PPR ADP, with each player's positional rank and current ADP.
     </p>
   </div>
 </div>
 
 <script>
 let DATA = null;
-let sortKey = "all_play_pct";
-let sortDir = -1;
+let sortKey = "rank";
+let sortDir = 1;
 let selectedWeek = null;
+let autoTabbed = false;
 
 const $ = (s) => document.querySelector(s);
 const pct = (v) => (v * 100).toFixed(1) + "%";
 const signed = (v) => (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%";
-const realPct = (t) => {
-  const g = t.real_wins + t.real_losses + t.real_ties;
-  return g ? (t.real_wins + 0.5 * t.real_ties) / g : 0;
-};
 
 function setStatus(text, cls) {
   $("#status-text").textContent = text;
@@ -269,11 +425,20 @@ function render(data) {
      data.current_week ? "WK " + String(data.current_week).padStart(2, "0") : null]
     .filter(Boolean).join(" · ");
 
+  renderDraft(data);
+  renderMatchups(data);
+  maybeAutoTab(data);
+
   if (data.state === "no_games_played" || !(data.teams || []).length) {
+    const d = data.draft || {};
     $("#cards").innerHTML =
       '<div class="card"><div class="label">STATUS</div>' +
       '<div class="value">No games played yet</div>' +
-      '<div class="note">The grid fills in once week 1 is in the books.</div></div>';
+      '<div class="note">' +
+      (d.exists && d.status !== "complete"
+        ? 'Draft board is on the DRAFT tab.'
+        : 'The grid fills in once week 1 is in the books.') +
+      '</div></div>';
     $("#standings").style.display = "none";
     return;
   }
@@ -286,20 +451,21 @@ function render(data) {
 }
 
 function renderCards(teams) {
+  const leader = [...teams].sort((a, b) => a.rank - b.rank)[0];
   const byLuck = [...teams].sort((a, b) => b.luck - a.luck);
   const luckiest = byLuck[0], unluckiest = byLuck[byLuck.length - 1];
   const best = [...teams].sort((a, b) => b.all_play_pct - a.all_play_pct)[0];
-  const scorer = [...teams].sort((a, b) => b.avg_points - a.avg_points)[0];
 
   const card = (label, value, note) =>
     `<div class="card"><div class="label">${label}</div>
      <div class="value">${value}</div><div class="note">${note}</div></div>`;
 
   $("#cards").innerHTML = [
+    card("FIRST PLACE", esc(leader.team_name),
+         `<span class="pos">${leader.real_wins}-${leader.real_losses}${leader.real_ties ? "-" + leader.real_ties : ""}</span>
+          · ${leader.real_points_for.toFixed(1)} pts`),
     card("STRONGEST ALL-PLAY", esc(best.team_name),
          `<span class="apct">${best.all_play_wins}-${best.all_play_losses} · ${pct(best.all_play_pct)}</span>`),
-    card("TOP SCORER", esc(scorer.team_name),
-         `<span style="color:var(--warn)">${scorer.avg_points.toFixed(1)} avg pts</span>`),
     card("LUCKIEST", esc(luckiest.team_name),
          `<span class="pos">${signed(luckiest.luck)}</span> over earned`),
     card("UNLUCKIEST", esc(unluckiest.team_name),
@@ -309,9 +475,7 @@ function renderCards(teams) {
 
 function renderStandings(teams) {
   const rows = [...teams].sort((a, b) => {
-    const get = (t) => sortKey === "real_pct" ? realPct(t)
-                     : sortKey === "team_name" ? t.team_name
-                     : t[sortKey];
+    const get = (t) => sortKey === "team_name" ? t.team_name : t[sortKey];
     const av = get(a), bv = get(b);
     if (typeof av === "string") return av.localeCompare(bv) * sortDir;
     return (av - bv) * sortDir;
@@ -320,9 +484,10 @@ function renderStandings(teams) {
 
   $("#standings tbody").innerHTML = rows.map((t) => `
     <tr>
-      <td class="rank"><b class="${t.all_play_rank <= half ? "top" : ""}">${t.all_play_rank}</b></td>
+      <td class="rank"><b class="${t.rank <= half ? "top" : ""}">${t.rank}</b></td>
       <td><div class="team">${esc(t.team_name)}</div><div class="mgr">${esc(t.manager)}</div></td>
-      <td>${t.real_wins}-${t.real_losses}${t.real_ties ? "-" + t.real_ties : ""}</td>
+      <td style="color:var(--text)">${t.real_wins}-${t.real_losses}${t.real_ties ? "-" + t.real_ties : ""}</td>
+      <td>${t.real_points_for.toFixed(1)}</td>
       <td style="color:var(--text)">${t.all_play_wins}-${t.all_play_losses}</td>
       <td class="apct">${pct(t.all_play_pct)}</td>
       <td class="luck-c"><div class="luck">${luckMeter(t.luck)}<span class="${t.luck >= 0 ? "pos" : "neg"}">${signed(t.luck)}</span></div></td>
@@ -386,7 +551,7 @@ function renderWeekPicker(data) {
   if (!weeks.includes(selectedWeek)) selectedWeek = weeks[weeks.length - 1];
 
   $("#week-chips").innerHTML = weeks.map((w) =>
-    `<button class="chip${w === selectedWeek ? " on" : ""}" data-week="${w}">${w}</button>`).join("");
+    `<button class="chip${w === selectedWeek ? " on" : ""}" data-week="${w}">${w}${w === data.live_week ? " LIVE" : ""}</button>`).join("");
   renderWeek(selectedWeek);
 }
 
@@ -416,6 +581,7 @@ function renderWeek(week) {
     ? rows[(rows.length - 1) / 2].pts
     : (rows[rows.length / 2 - 1].pts + rows[rows.length / 2].pts) / 2;
   $("#week-summary").textContent =
+    (week === DATA.live_week ? "in progress, not counted in standings · " : "") +
     `high ${max.toFixed(1)} · low ${rows[rows.length - 1].pts.toFixed(1)} · median ${mid.toFixed(1)}`;
 
   $("#weekly tbody").innerHTML = rows.map((r, i) => {
@@ -430,6 +596,101 @@ function renderWeek(week) {
       <td class="segs-c"><div class="segs">${segMeter(beat, rows.length - 1)}</div></td>
     </tr>`;
   }).join("");
+}
+
+function draftTime(ms) {
+  if (!ms) return "";
+  try {
+    return new Date(ms).toLocaleString([], {
+      weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+    });
+  } catch (e) { return ""; }
+}
+
+// Short tag for a team name, for the narrow board column headers: word initials
+// when the name is multi-word, otherwise the first few letters.
+function initials(name) {
+  const c = String(name).replace(/[^A-Za-z0-9 ]/g, "").trim();
+  const words = c.split(/\s+/).filter(Boolean);
+  const tag = words.length > 1
+    ? words.map((w) => w[0]).join("").slice(0, 4)
+    : c.slice(0, 4);
+  return (tag || "—").toUpperCase();
+}
+
+function maybeAutoTab(data) {
+  if (autoTabbed) return;
+  const d = data.draft;
+  const noGames = data.state === "no_games_played" || !(data.teams || []).length;
+  if (noGames && d && d.exists && d.status !== "complete") {
+    autoTabbed = true;
+    const btn = document.querySelector('.tab[data-panel="draft"]');
+    if (btn) btn.click();
+  }
+}
+
+function renderDraft(data) {
+  const d = data.draft;
+  const tab = document.querySelector('.tab[data-panel="draft"]');
+  if (!d || !d.exists) { if (tab) tab.style.display = "none"; return; }
+  if (tab) tab.style.display = "";
+
+  const made = d.picks_made || 0, total = d.total_picks || 0;
+  const pctDone = total ? (made / total * 100).toFixed(1) : 0;
+
+  let head;
+  if (d.status === "complete") {
+    head = `<span class="oc done">DRAFT COMPLETE</span><span class="meta">${total} picks</span>`;
+  } else if (d.on_clock) {
+    const oc = d.on_clock;
+    head =
+      `<span class="oc">R${oc.round} · PICK ${oc.pick_no} — ON THE CLOCK: ${esc(oc.team_name)}</span>` +
+      `<span class="meta">${made} / ${total} picks${d.pick_timer ? " · " + d.pick_timer + "s timer" : ""}` +
+      `${d.status === "paused" ? " · PAUSED" : ""}</span>` +
+      `<span class="bar"><i style="width:${pctDone}%"></i></span>`;
+  } else if (d.status === "pre_draft") {
+    head =
+      `<span class="oc pre">DRAFT NOT STARTED</span>` +
+      `<span class="meta">${d.start_time ? "Starts " + draftTime(d.start_time) : "Start time TBD"}` +
+      ` · ${d.rounds} rounds · ${d.teams} teams · ${esc(d.type || "")}</span>`;
+  } else {
+    head = `<span class="oc pre">${esc(String(d.status || "").toUpperCase())}</span>` +
+           `<span class="meta">${made} / ${total} picks</span>`;
+  }
+  $("#draft-head").innerHTML = head;
+
+  const slots = d.slots || [];
+  let html = "<thead><tr><th class='rnd'>RND</th>" +
+    slots.map((s) => `<th title="${esc(s.team_name)} · ${esc(s.manager)}">${esc(initials(s.team_name))}</th>`).join("") +
+    "</tr></thead><tbody>";
+  for (const row of (d.board || [])) {
+    html += `<tr><th class="rnd">${row.round}<span class="dir">${row.forward ? "&gt;" : "&lt;"}</span></th>`;
+    for (const cell of row.picks) {
+      if (cell.player) {
+        html += `<td class="pos-${esc(cell.pos)}${cell.on_clock ? " on" : ""}">` +
+          `<span class="pn">#${cell.pick_no}${cell.is_keeper ? " · K" : ""}</span>` +
+          `<div class="nm">${esc(cell.player)}</div>` +
+          `<div class="pt">${esc(cell.pos)} · ${esc(cell.team)}</div></td>`;
+      } else {
+        html += `<td class="empty-cell${cell.on_clock ? " on" : ""}">` +
+          `<span class="pn">#${cell.pick_no}</span>` +
+          `${cell.on_clock ? '<div class="nm">on the clock</div>' : ""}</td>`;
+      }
+    }
+    html += "</tr>";
+  }
+  $("#draft-board").innerHTML = html + "</tbody>";
+
+  const best = d.best_available || [];
+  $("#draft-best").innerHTML = "<h4>BEST AVAILABLE</h4><ol>" + (
+    best.length
+      ? best.map((b, i) =>
+          `<li><span class="r">${i + 1}</span>` +
+          `<span class="bi"><div class="n" title="${esc(b.player)}">${esc(b.player)}</div>` +
+          `<div class="pr">${esc(b.pos_rank)} · ${esc(b.team)}${b.proj != null ? " · " + b.proj.toFixed(1) + " proj" : ""}</div></span>` +
+          `<span class="ad">${b.adp != null ? b.adp.toFixed(1) : "—"}</span></li>`).join("")
+      : '<li><span class="n" style="color:var(--muted)">—</span></li>'
+  ) + "</ol>";
 }
 
 function esc(s) {
@@ -449,7 +710,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
 document.querySelectorAll("#standings th[data-sort]").forEach((th) => {
   th.onclick = () => {
     const key = th.dataset.sort;
-    sortDir = key === sortKey ? -sortDir : (key === "team_name" ? 1 : -1);
+    sortDir = key === sortKey ? -sortDir : (key === "team_name" || key === "rank" ? 1 : -1);
     sortKey = key;
     if (DATA) renderStandings(DATA.teams);
   };
@@ -458,6 +719,113 @@ document.querySelectorAll("#standings th[data-sort]").forEach((th) => {
 $("#week-chips").onclick = (e) => {
   const chip = e.target.closest(".chip");
   if (chip) renderWeek(+chip.dataset.week);
+};
+
+let muWeek = null;
+const muOpen = new Set();
+
+function renderMatchups(data) {
+  const weeks = data.matchup_weeks || [];
+  if (!weeks.length) {
+    $("#mu-chips").innerHTML = "";
+    $("#mu-summary").textContent = "";
+    $("#mu-list").innerHTML = '<div class="empty">No matchups yet.</div>';
+    return;
+  }
+  if (!weeks.includes(muWeek)) muWeek = data.live_week || weeks[weeks.length - 1];
+  $("#mu-chips").innerHTML = weeks.map((w) =>
+    `<button class="chip${w === muWeek ? " on" : ""}" data-week="${w}">${w}${w === data.live_week ? " LIVE" : ""}</button>`).join("");
+
+  // A failed game state read is the one case where the page must explain
+  // itself: every starter reads as still to play, so nothing can go final.
+  const gs = data.game_state || {};
+  $("#mu-warn").innerHTML = gs.ok === false
+    ? `<div class="warn-bar"><b>GAME STATUS DOWN</b><div>Could not read which
+       NFL games have finished, so no matchup can be called final and the
+       standings are holding at week ${esc(data.last_completed_week)}. Scores
+       below are still live. <span style="color:var(--dim)">${esc(gs.error || "")}</span></div></div>`
+    : "";
+
+  const names = {};
+  (data.teams || []).forEach((t) => (names[t.roster_id] = t));
+  const me = data.my_roster_id;
+  const list = [...((data.matchups || {})[String(muWeek)] || [])].sort((a, b) => {
+    const mine = (m) => m.sides.some((s) => s.roster_id === me) ? 0 : 1;
+    return mine(a) - mine(b) || a.matchup_id - b.matchup_id;
+  });
+
+  const finals = list.filter((m) => m.status === "final").length;
+  $("#mu-summary").textContent = `${finals} of ${list.length} final`;
+
+  const pips = (s, right) => {
+    const order = { post: 0, bye: 0, in: 1, pre: 2 };
+    const blocks = [...s.lineup].sort((a, b) => order[a.state] - order[b.state])
+      .map((p) => `<i class="${p.state}"></i>`).join("");
+    const left = s.total - s.done;
+    const label = `<span>${left ? left + " left" : "done"}</span>`;
+    return right ? label + blocks : blocks + label;
+  };
+
+  const side = (m, s, right) => {
+    const t = names[s.roster_id] || {};
+    const cls = m.status !== "final" || m.tie ? "" : m.winner === s.roster_id ? " won" : " lost";
+    const tag = m.winner === s.roster_id ? '<span class="mu-tag">WIN</span>' : "";
+    const name = esc(t.team_name || "Roster " + s.roster_id);
+    return `<div class="mu-side${right ? " r" : ""}${cls}">
+      <div class="team">${right ? tag + name : name + tag}</div>
+      <div class="mu-score">${s.points.toFixed(2)}</div>
+      <div class="pips">${pips(s, right)}</div>
+    </div>`;
+  };
+
+  const lineup = (m) => {
+    const [a, b] = m.sides;
+    const n = Math.max(a.lineup.length, b.lineup.length);
+    let rows = "";
+    for (let i = 0; i < n; i++) {
+      const l = a.lineup[i] || {}, r = b.lineup[i] || {};
+      const sub = (p) => `<span class="sub">${esc([p.position, p.team].filter(Boolean).join(" "))}</span>`;
+      rows += `<tr>
+        <td class="pl"><i class="st ${l.state || ""}"></i>${esc(l.name || "")}${sub(l)}</td>
+        <td class="pts">${l.points != null ? l.points.toFixed(2) : ""}</td>
+        <td class="slot">${esc(l.slot || r.slot || "")}</td>
+        <td class="pts l">${r.points != null ? r.points.toFixed(2) : ""}</td>
+        <td class="pl r">${sub(r)}${esc(r.name || "")}<i class="st ${r.state || ""}"></i></td>
+      </tr>`;
+    }
+    return `<table class="lineup"><tbody>${rows}</tbody></table>`;
+  };
+
+  $("#mu-list").innerHTML = list.map((m) => {
+    const key = muWeek + ":" + m.matchup_id;
+    const [a, b] = m.sides;
+    const mine = m.sides.some((s) => s.roster_id === me);
+    const label = m.status === "final" ? "FINAL" : m.status === "live" ? "LIVE" : "UPCOMING";
+    const by = m.status === "final"
+      ? (m.tie ? "tie" : "by " + Math.abs(a.points - b.points).toFixed(2))
+      : m.status === "live" ? "no winner yet" : "";
+    return `<div class="mu${mine ? " mine" : ""}${muOpen.has(key) ? " open" : ""}" data-key="${key}">
+      <button class="mu-head" aria-expanded="${muOpen.has(key)}">
+        ${side(m, a, false)}
+        <div class="mu-mid"><span class="badge ${m.status}">${label}</span><div class="by">${by}</div></div>
+        ${side(m, b, true)}
+      </button>
+      <div class="mu-body">${lineup(m)}</div>
+    </div>`;
+  }).join("");
+}
+
+$("#mu-chips").onclick = (e) => {
+  const chip = e.target.closest(".chip");
+  if (chip && DATA) { muWeek = +chip.dataset.week; renderMatchups(DATA); }
+};
+$("#mu-list").onclick = (e) => {
+  const card = e.target.closest(".mu");
+  if (!card) return;
+  const key = card.dataset.key;
+  muOpen.has(key) ? muOpen.delete(key) : muOpen.add(key);
+  card.classList.toggle("open");
+  card.querySelector(".mu-head").setAttribute("aria-expanded", muOpen.has(key));
 };
 
 // Live updates. SSE reconnects on its own; the fetch is just for first paint

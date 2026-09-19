@@ -13,7 +13,7 @@ a team's real record and its all play record is schedule luck.
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import cache, client, config
+from . import cache, client, config, gamestatus
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Primitive fetches, each with the TTL its data class warrants
@@ -522,15 +522,213 @@ def compute_luck(
     return luck
 
 
+def build_week_matchups(
+    entries: List[Dict[str, Any]],
+    players: Dict[str, Any],
+    team_states: Optional[Dict[str, str]],
+    *,
+    week_is_closed: bool,
+    slots: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Turn one week of raw Sleeper matchup entries into head to head pairings.
+
+    Pure function. A pairing is final only once every starter on both sides has
+    finished playing (game over, on bye, or an empty slot). Until then there is
+    no winner, however lopsided the score. week_is_closed short circuits all of
+    that for weeks Sleeper itself has already rolled past.
+    """
+    def side(entry: Dict[str, Any]) -> Dict[str, Any]:
+        starters = entry.get("starters") or []
+        pts = entry.get("starters_points") or []
+        lineup = []
+        for i, pid in enumerate(starters):
+            info = players.get(str(pid)) or {}
+            state = (
+                gamestatus.POST if week_is_closed
+                else gamestatus.starter_state(pid, players, team_states)
+            )
+            name = info.get("full_name") or (
+                f"{info.get('first_name', '')} {info.get('last_name', '')}".strip()
+            )
+            if not name:
+                name = "Empty" if str(pid) in ("0", "") else str(pid)
+            lineup.append({
+                "slot": slots[i] if slots and i < len(slots) else "",
+                "player_id": str(pid),
+                "name": name,
+                "position": info.get("position") or ("DEF" if str(pid).isalpha() else ""),
+                "team": info.get("team") or (str(pid) if str(pid).isalpha() else ""),
+                "points": float(pts[i]) if i < len(pts) and pts[i] is not None else 0.0,
+                "state": state,
+            })
+        progress = gamestatus.summarize_states([p["state"] for p in lineup])
+        return {
+            "roster_id": entry["roster_id"],
+            "points": float(entry.get("points") or 0.0),
+            **progress,
+            "complete": week_is_closed or (
+                team_states is not None and progress["done"] == progress["total"]
+            ),
+            "lineup": lineup,
+        }
+
+    pairs: Dict[Any, List[Dict[str, Any]]] = {}
+    for m in entries or []:
+        pairs.setdefault(m.get("matchup_id"), []).append(m)
+
+    out: List[Dict[str, Any]] = []
+    for matchup_id, sides in pairs.items():
+        if matchup_id is None or len(sides) != 2:
+            continue  # bye weeks and malformed entries
+        a, b = (side(e) for e in sides)
+        final = a["complete"] and b["complete"]
+        started = any(
+            p["state"] in (gamestatus.IN, gamestatus.POST)
+            for s in (a, b) for p in s["lineup"]
+        )
+        winner: Optional[int] = None
+        tie = False
+        if final:
+            if a["points"] > b["points"]:
+                winner = a["roster_id"]
+            elif b["points"] > a["points"]:
+                winner = b["roster_id"]
+            else:
+                tie = True
+        out.append({
+            "matchup_id": matchup_id,
+            "status": "final" if final else "live" if started else "upcoming",
+            "winner": winner,
+            "tie": tie,
+            "sides": [a, b],
+        })
+    out.sort(key=lambda m: m["matchup_id"])
+    return out
+
+
+def real_results_from_matchups(
+    matchups_by_week: Dict[int, List[Dict[str, Any]]],
+) -> Dict[int, List[Dict[str, Any]]]:
+    """
+    Head to head result rows for every pairing that is final. Pure function.
+
+    Same row shape get_real_results produces, so summarize_real_records works
+    on either. Pairings still being played contribute nothing at all.
+    """
+    by_week: Dict[int, List[Dict[str, Any]]] = {}
+    for week_no, matchups in matchups_by_week.items():
+        rows: List[Dict[str, Any]] = []
+        for m in matchups:
+            if m["status"] != "final":
+                continue
+            a, b = m["sides"]
+            for me, them in ((a, b), (b, a)):
+                rows.append({
+                    "roster_id": me["roster_id"],
+                    "opponent_id": them["roster_id"],
+                    "points": me["points"],
+                    "opponent_points": them["points"],
+                    "result": (
+                        "T" if m["tie"]
+                        else "W" if m["winner"] == me["roster_id"] else "L"
+                    ),
+                })
+        if rows:
+            by_week[week_no] = rows
+    return by_week
+
+
+def fully_final_weeks(
+    matchups_by_week: Dict[int, List[Dict[str, Any]]],
+) -> List[int]:
+    """
+    Weeks in which every pairing is final. Pure function.
+
+    All play and the grid score each team against the whole league, so a week
+    only enters them once the last starter in the league has finished.
+    """
+    return sorted(
+        w for w, ms in matchups_by_week.items()
+        if ms and all(m["status"] == "final" for m in ms)
+    )
+
+
+async def get_matchups_by_week(
+    through_week: int,
+    league_id: Optional[str] = None,
+    current_week: Optional[int] = None,
+    last_completed: int = 0,
+) -> Tuple[Dict[int, List[Dict[str, Any]]], Dict[int, Dict[str, Any]]]:
+    """
+    Head to head pairings for weeks 1..through_week, with per starter progress.
+
+    Returns the pairings and, beside them, the game state report for each open
+    week, so the caller can say why nothing is final when a provider is down.
+    Weeks at or before last_completed are closed and need no game state, so only
+    the week in progress costs a scoreboard call.
+    """
+    if through_week < 1:
+        return {}, {}
+    lid = league_id or await get_league_id()
+    weeks = list(range(1, through_week + 1))
+    open_weeks = [w for w in weeks if w > last_completed]
+
+    league = await get_league()
+    season = str(league.get("season") or config.CURRENT_SEASON)
+    slots = [
+        "FLEX" if "FLEX" in pos else pos
+        for pos in (league.get("roster_positions") or [])
+        if pos not in ("BN", "IR", "TAXI")
+    ]
+
+    fetched = await client.gather(
+        get_players(),
+        *[
+            get_matchups(w, lid, is_final=(current_week is None or w < current_week))
+            for w in weeks
+        ],
+        *[gamestatus.get_week_game_states(season, w) for w in open_weeks],
+    )
+    players = fetched[0]
+    entries_by_week = dict(zip(weeks, fetched[1:1 + len(weeks)]))
+    reports = dict(zip(open_weeks, fetched[1 + len(weeks):]))
+
+    out: Dict[int, List[Dict[str, Any]]] = {}
+    for w in weeks:
+        entries = entries_by_week.get(w) or []
+        closed = w <= last_completed
+        states = (reports.get(w) or {}).get("states")
+        matchups = build_week_matchups(
+            entries, players, states, week_is_closed=closed, slots=slots
+        )
+        # Same rule as get_weekly_scores: a closed week nobody scored in was
+        # never played. An open week is kept so upcoming pairings can be shown.
+        if not matchups:
+            continue
+        if closed and not any(s["points"] > 0 for m in matchups for s in m["sides"]):
+            continue
+        out[w] = matchups
+    return out, reports
+
+
 def summarize_real_records(
     real_results: Dict[int, List[Dict[str, Any]]],
-) -> Dict[int, Dict[str, int]]:
-    """Collapse weekly head to head rows into a win/loss/tie record per roster."""
-    records: Dict[int, Dict[str, int]] = {}
+) -> Dict[int, Dict[str, Any]]:
+    """
+    Collapse weekly head to head rows into a record per roster.
+
+    Points for and against come from the same decided pairings as the record,
+    so the standings tiebreaker can never disagree with the standings: a team
+    whose week is already settled has both its result and its points counted,
+    and a team still playing has neither.
+    """
+    records: Dict[int, Dict[str, Any]] = {}
     for rows in real_results.values():
         for row in rows:
             rec = records.setdefault(
-                row["roster_id"], {"wins": 0, "losses": 0, "ties": 0}
+                row["roster_id"],
+                {"wins": 0, "losses": 0, "ties": 0, "points_for": 0.0, "points_against": 0.0},
             )
             if row["result"] == "W":
                 rec["wins"] += 1
@@ -538,6 +736,11 @@ def summarize_real_records(
                 rec["losses"] += 1
             else:
                 rec["ties"] += 1
+            rec["points_for"] += row["points"]
+            rec["points_against"] += row["opponent_points"]
+    for rec in records.values():
+        rec["points_for"] = round(rec["points_for"], 2)
+        rec["points_against"] = round(rec["points_against"], 2)
     return records
 
 
@@ -571,21 +774,54 @@ async def build_dashboard_payload(
             "current_week": current_week,
             "last_completed_week": last_completed,
             "weeks_available": [],
+            "matchup_weeks": [],
+            "final_weeks": [],
+            "live_week": None,
+            "game_state": {"ok": True, "source": None, "error": None, "teams": 0},
+            "matchups": {},
             "teams": _rank_teams({}, {}, {}, directory),
             "grid": {},
             "weekly_scores": {},
             "state": "no_games_played",
         }
 
-    weekly_scores, real_results = await client.gather(
+    weekly_scores, (matchups_by_week, game_reports) = await client.gather(
         get_weekly_scores(through, lid, current_week),
-        get_real_results(through, lid, current_week),
+        get_matchups_by_week(through, lid, current_week, last_completed),
     )
 
-    all_play = compute_all_play(weekly_scores)
-    grid = compute_head_to_head_grid(weekly_scores)
+    # Nothing counts until it is decided. A head to head result lands the moment
+    # every starter on both sides of that pairing has finished. All play, the
+    # grid and luck compare each team with the whole league, so they wait for
+    # the last starter in the league.
+    final_weeks = fully_final_weeks(matchups_by_week)
+    final_scores = {w: s for w, s in weekly_scores.items() if w in final_weeks}
+    real_results = real_results_from_matchups(matchups_by_week)
+    live_week = (
+        current_week
+        if current_week > last_completed and current_week not in final_weeks
+        else None
+    )
+
+    # Whose dashboard this is, so the page can pin that pairing to the top.
+    my_roster_id: Optional[int] = None
+    try:
+        me = await get_user_id()
+        my_roster_id = next(
+            (rid for rid, info in directory.items() if info.get("owner_id") == me), None
+        )
+    except Exception:  # noqa: BLE001  purely cosmetic, never worth failing over
+        pass
+
+    all_play = compute_all_play(final_scores)
+    grid = compute_head_to_head_grid(final_scores)
     real_records = summarize_real_records(real_results)
-    luck = compute_luck(all_play, real_records)
+    # Luck compares like with like: real results from the same weeks all play
+    # covers, so a pairing decided early cannot skew it for a day.
+    luck = compute_luck(
+        all_play,
+        summarize_real_records({w: r for w, r in real_results.items() if w in final_weeks}),
+    )
 
     return {
         "league": {
@@ -598,6 +834,12 @@ async def build_dashboard_payload(
         "current_week": current_week,
         "last_completed_week": last_completed,
         "weeks_available": sorted(weekly_scores.keys()),
+        "matchup_weeks": sorted(matchups_by_week.keys()),
+        "final_weeks": final_weeks,
+        "live_week": live_week,
+        "game_state": _game_state_report(game_reports, current_week),
+        "my_roster_id": my_roster_id,
+        "matchups": {str(w): ms for w, ms in matchups_by_week.items()},
         "teams": _rank_teams(all_play, real_records, luck, directory),
         "grid": {str(a): {str(b): c for b, c in row.items()} for a, row in grid.items()},
         "weekly_scores": {
@@ -607,13 +849,43 @@ async def build_dashboard_payload(
     }
 
 
+def _game_state_report(
+    reports: Dict[int, Dict[str, Any]],
+    current_week: int,
+) -> Dict[str, Any]:
+    """
+    Flatten the current week's game state fetch into something displayable.
+
+    ``ok`` false means no game finished or in progress could be established, so
+    every starter is being counted as still to play and nothing will be called
+    final. The dashboard says so out loud rather than looking like a quiet week.
+    """
+    report = reports.get(current_week)
+    if report is None:
+        return {"ok": True, "source": None, "error": None, "teams": 0}
+    states = report.get("states")
+    return {
+        "ok": states is not None,
+        "source": report.get("source"),
+        "error": report.get("error"),
+        "teams": len(states or {}),
+    }
+
+
 def _rank_teams(
     all_play: Dict[int, Dict[str, Any]],
     real_records: Dict[int, Dict[str, int]],
     luck: Dict[int, float],
     directory: Dict[int, Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Merge every per team metric into one list, sorted by all play percentage."""
+    """
+    Merge every per team metric into one list, ranked by the real record.
+
+    The league standing is the record a team actually has, so that is what the
+    rank column counts, broken by points scored the way Sleeper breaks it. All
+    play still gets its own rank alongside, because the gap between the two is
+    the whole point of the luck column.
+    """
     rows: List[Dict[str, Any]] = []
     for rid, info in directory.items():
         ap = all_play.get(rid, {})
@@ -621,12 +893,15 @@ def _rank_teams(
             "wins": info.get("wins", 0),
             "losses": info.get("losses", 0),
             "ties": info.get("ties", 0),
+            "points_for": info.get("points_for", 0.0),
         }
         rows.append({
             **info,
             "real_wins": real.get("wins", 0),
             "real_losses": real.get("losses", 0),
             "real_ties": real.get("ties", 0),
+            "real_points_for": round(real.get("points_for", 0.0) or 0.0, 2),
+            "real_pct": _win_pct(real),
             "all_play_wins": ap.get("all_play_wins", 0),
             "all_play_losses": ap.get("all_play_losses", 0),
             "all_play_ties": ap.get("all_play_ties", 0),
@@ -641,4 +916,27 @@ def _rank_teams(
     rows.sort(key=lambda r: (r["all_play_pct"], r["avg_points"]), reverse=True)
     for i, row in enumerate(rows, start=1):
         row["all_play_rank"] = i
+
+    # Record first, then points scored, the standard tiebreak. All play and
+    # average points only settle teams that are level on both, which is mostly
+    # week one before anything has been decided.
+    rows.sort(
+        key=lambda r: (
+            r["real_pct"],
+            r["real_points_for"],
+            r["all_play_pct"],
+            r["avg_points"],
+        ),
+        reverse=True,
+    )
+    for i, row in enumerate(rows, start=1):
+        row["rank"] = i
     return rows
+
+
+def _win_pct(record: Dict[str, Any]) -> float:
+    """Win percentage counting a tie as half a win. Pure function."""
+    wins = record.get("wins", 0)
+    ties = record.get("ties", 0)
+    played = wins + record.get("losses", 0) + ties
+    return round((wins + 0.5 * ties) / played, 4) if played else 0.0

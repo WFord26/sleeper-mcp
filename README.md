@@ -179,18 +179,47 @@ uv run web/app.py
 # then open http://127.0.0.1:8080
 ```
 
-Three views: **standings** (sortable, with the luck column), **head to head
-grid** (the everyone vs everyone matrix), and **by week** (each week's scores
-with how many teams you would have beaten that week).
+Five views: **standings** (ranked by real record, then points scored, with the
+luck column and every column sortable), **matchups** (the
+week's real head to head pairings, with a block per starter showing who has
+finished, who is playing and who is still to come; click one for both lineups),
+**head to head
+grid** (the everyone vs everyone matrix), **by week** (each week's scores
+with how many teams you would have beaten that week), and **draft** — a live
+snake board that fills in pick by pick during your league's draft, with an
+on-the-clock banner and an ADP-ranked best-available list. The draft tab only
+appears when the league has a draft; it opens automatically before week 1.
 
 ![Standings view](docs/assets/standings.png)
 ![Head-to-head grid](docs/assets/h2h-grid.png)
 ![By week](docs/assets/by-week.png)
 
+**What the rank means.** The standings rank on the record a team actually has,
+broken by points scored, the way Sleeper breaks it. All play keeps its own rank
+in the `AP#` column of the MCP table, and the gap between the two is the luck
+column: a team can sit seventh on a record while scoring like the fourth best
+team in the league.
+
+**When a result counts.** A pairing has no winner until every starter on both
+sides has finished playing (game final, team on bye, or an empty slot). At that
+moment the win or loss reaches the standings, even if other games in the league
+are still going. All play, the grid and luck compare each team with the whole
+league, so they wait for the last starter in the league to finish.
+
+Game state comes from Sleeper's own scores endpoint, which reports each game as
+pre game, in game or complete using the same team abbreviations as its player
+records. ESPN's scoreboard is the fallback. ESPN answers or refuses that
+endpoint depending on the User-Agent and the host asking — the same request can
+succeed from one machine and return 403 from another — so it is no longer
+trusted as the only source. If neither can be read, nothing is declared final
+until Sleeper rolls to the next week, and the dashboard says so on the matchups
+tab rather than showing a finished game as still to play.
+
 The server polls Sleeper on one background task and pushes updates to every open
 tab over server sent events, so upstream call volume stays flat no matter how
-many tabs are open. Polling is every 30 seconds during game windows and every 15
-minutes otherwise; it idles entirely when nobody is watching.
+many tabs are open. Polling is every 30 seconds during game windows, every 12
+seconds while a draft is live, and every 15 minutes otherwise; it idles when
+nobody is watching, unless a draft is running.
 
 ### Architecture
 
@@ -204,6 +233,7 @@ sleeper/
   cache.py     TTL cache per data class, disk persistence for the player map
   scoring.py   fantasy point calculation (the only copy)
   league.py    typed data access plus the all play model
+  draft.py     live draft board model (snake maths, board assembly, ADP)
   render.py    data -> markdown, used only by the MCP adapter
 sleeper_fantasy_mcp.py   MCP adapter (18 tools)
 web/app.py               dashboard adapter (JSON + SSE)
@@ -233,6 +263,7 @@ cp .env.example .env
 | `SLEEPER_WEB_PORT` | `8080` | Dashboard port |
 | `SLEEPER_POLL_LIVE` | `30` | Poll seconds during games |
 | `SLEEPER_POLL_IDLE` | `900` | Poll seconds otherwise |
+| `SLEEPER_POLL_DRAFT` | `12` | Poll seconds while your league's draft is live |
 | `SLEEPER_TRENDING_LOOKBACK` | `24` | Hours of add/drop volume behind the buzz signal |
 | `SLEEPER_CACHE_DIR` | `~/.cache/sleeper-mcp` | Player cache **and** the daily snapshot database |
 
@@ -257,7 +288,9 @@ SLEEPER_LEAGUE_ID=1257056909626724352 SLEEPER_SEASON=2025 uv run web/app.py
 ### Tests
 
 ```bash
-python3 -m pytest tests/test_allplay.py -q   # all play model, 14 tests
+python3 -m pytest tests/ -q                   # full suite
+python3 -m pytest tests/test_allplay.py -q     # all play model, 14 tests
+python3 -m pytest tests/test_draft.py -q       # draft board: snake maths, board assembly, ADP
 
 # golden file check: proves a refactor did not change MCP tool output
 python3 tests/golden.py capture before
@@ -340,8 +373,8 @@ YA<100=5 · YA100-199=3 · YA200-299=2 · YA300-349=1 · YA400-449=-1 · YA450-4
 
 | Source | Used for | Auth |
 |--------|----------|------|
-| Sleeper API | Roster, league, stats, weekly projections, snap counts | None |
-| ESPN public scoreboard API | Real NFL schedule, opponents, home/away, venue (Sleeper has no schedule endpoint) | None |
+| Sleeper API | Roster, league, stats, weekly projections, snap counts, live game state | None |
+| ESPN public scoreboard API | Fallback game state, real NFL schedule, opponents, home/away, venue (Sleeper has no schedule endpoint) | None |
 | Open-Meteo | 16-day weather forecast for game venues | None |
 
 The ESPN and Open-Meteo endpoints are free, public, and don't require registration — but they're also unofficial/undocumented in ESPN's case, so if either changes shape upstream, the schedule/weather/bye-week/SOS tools may need small fixes (they fail gracefully with a message rather than crashing).
@@ -362,3 +395,4 @@ The ESPN and Open-Meteo endpoints are free, public, and don't require registrati
 - **Pre-draft state:** Before your league's draft happens, your roster is empty — `get_optimal_lineup`, `get_injury_report`, and `get_bye_week_report` will say so rather than showing misleading empty tables. Use `get_draft_best_available` instead during the actual draft.
 - **Composite ranking:** `get_available_players` and `get_waiver_recommendations` rank by `proj_pts + SOS bonus (±2 pts) + snap trend bonus (±3 pts)`, not raw projection alone — a player with a rising snap share or a soft upcoming schedule can outrank a higher-projected player who's losing his role. Weights are tunable constants at the top of the file (`SOS_MAX_BONUS`, `SNAP_TREND_MAX_BONUS`, etc.).
 - **Draft ADP:** `get_draft_best_available` uses Sleeper's `adp_dd_ppr` / `pos_adp_dd_ppr` fields from the projections endpoint (falls back to `search_rank` if ADP isn't populated for a player yet). It reads the *live draft's* pick list, not season rosters, so it stays accurate mid-draft before rosters update, and shows who's on the clock via snake-draft math from the draft order.
+- **Dashboard draft tab:** The web dashboard's **draft** view (`sleeper/draft.py`) is built on the same pick list and ADP source. It renders the full snake board — every round × draft slot, filling in pick by pick — with an on-the-clock banner and an ADP-ranked best-available sidebar. The server polls every `SLEEPER_POLL_DRAFT` seconds (default 12) while the draft status is `drafting`, and keeps polling even with nobody connected since a draft is short and bounded. The tab hides itself when the league has no draft and auto-opens before week 1. Third-round reversal (`reversal_round`) is handled with the standard parity flip.

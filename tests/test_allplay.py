@@ -163,8 +163,10 @@ def test_summarize_real_records():
         ],
     }
     recs = summarize_real_records(weekly)
-    assert recs[1] == {"wins": 1, "losses": 0, "ties": 1}
-    assert recs[2] == {"wins": 0, "losses": 1, "ties": 1}
+    assert recs[1] == {"wins": 1, "losses": 0, "ties": 1,
+                       "points_for": 180.0, "points_against": 170.0}
+    assert recs[2] == {"wins": 0, "losses": 1, "ties": 1,
+                       "points_for": 170.0, "points_against": 180.0}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -187,3 +189,4 @@ def test_known_2025_shape():
     assert sum(r["all_play_wins"] for r in out.values()) == 924
     assert sum(r["all_play_losses"] for r in out.values()) == 924
     assert all(r["all_play_games"] == 154 for r in out.values())  # 11 * 14
+

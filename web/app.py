@@ -30,7 +30,7 @@ from starlette.responses import FileResponse, JSONResponse, StreamingResponse  #
 from starlette.routing import Mount, Route  # noqa: E402
 from starlette.staticfiles import StaticFiles  # noqa: E402
 
-from sleeper import client, config, league  # noqa: E402
+from sleeper import client, config, draft, league  # noqa: E402
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -98,11 +98,49 @@ def _is_game_window() -> bool:
     return False
 
 
+async def build_full_payload() -> Dict[str, Any]:
+    """
+    The all-play dashboard payload with the live draft board folded in under
+    ``draft``. The draft build is isolated so a draft-side upstream hiccup can
+    never blank the scoreboard, and vice versa.
+    """
+    payload = await league.build_dashboard_payload()
+    try:
+        payload["draft"] = await draft.build_draft_payload()
+    except Exception as exc:  # noqa: BLE001
+        payload["draft"] = {"exists": False, "error": client.describe_error(exc)}
+    return payload
+
+
+def _week_is_hot() -> bool:
+    """
+    True when the open week needs watching regardless of the clock.
+
+    Either a starter is on the field right now, or the game state read failed
+    and every matchup is stuck pending until it succeeds. The weekday windows
+    below are a good guess at when games run; this is knowledge of what is
+    actually happening, so it wins.
+    """
+    payload = broadcaster.latest or {}
+    live_week = payload.get("live_week")
+    if live_week is None:
+        return False
+    if not (payload.get("game_state") or {}).get("ok", True):
+        return True
+    matchups = (payload.get("matchups") or {}).get(str(live_week)) or []
+    return any(side.get("playing") for m in matchups for side in m.get("sides", []))
+
+
+def _draft_is_live() -> bool:
+    d = (broadcaster.latest or {}).get("draft") or {}
+    return d.get("status") in ("drafting", "paused")
+
+
 async def poll_loop() -> None:
-    """Refresh the payload forever, fast during games and slow otherwise."""
+    """Refresh the payload forever, fast during games or a live draft, slow otherwise."""
     while True:
         try:
-            payload = await league.build_dashboard_payload()
+            payload = await build_full_payload()
             broadcaster.last_error = None
             broadcaster.publish(payload)
         except Exception as exc:  # noqa: BLE001
@@ -111,20 +149,26 @@ async def poll_loop() -> None:
             broadcaster.last_error = client.describe_error(exc)
             print(f"[poller] {broadcaster.last_error}", file=sys.stderr)
 
-        live = _is_game_window()
-        # No point polling fast if nobody is watching.
-        if not broadcaster.subscriber_count:
-            interval = config.POLL_INTERVAL_IDLE
+        if _draft_is_live():
+            # Snake picks land every minute or two; keep the board close to live
+            # even with nobody connected, since a draft is short and bounded.
+            interval = (
+                config.POLL_INTERVAL_DRAFT if broadcaster.subscriber_count else 60
+            )
+        elif not broadcaster.subscriber_count:
+            interval = config.POLL_INTERVAL_IDLE  # no point polling fast if nobody is watching
         else:
             interval = (
-                config.POLL_INTERVAL_LIVE if live else config.POLL_INTERVAL_IDLE
+                config.POLL_INTERVAL_LIVE
+                if (_is_game_window() or _week_is_hot())
+                else config.POLL_INTERVAL_IDLE
             )
         await asyncio.sleep(interval)
 
 
 async def _ensure_payload() -> Dict[str, Any]:
     if broadcaster.latest is None:
-        broadcaster.publish(await league.build_dashboard_payload())
+        broadcaster.publish(await build_full_payload())
     return broadcaster.latest or {}
 
 
@@ -188,6 +232,19 @@ async def api_week(request: Request) -> JSONResponse:
         return JSONResponse({"error": client.describe_error(exc)}, status_code=502)
 
 
+async def api_draft(request: Request) -> JSONResponse:
+    """Just the draft board slice of the payload, for debugging and direct polling."""
+    try:
+        payload = await _ensure_payload()
+        return JSONResponse({
+            "draft": payload.get("draft"),
+            "last_updated": broadcaster.last_updated,
+            "error": broadcaster.last_error,
+        })
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": client.describe_error(exc)}, status_code=502)
+
+
 async def api_health(request: Request) -> JSONResponse:
     from sleeper import cache
 
@@ -196,8 +253,12 @@ async def api_health(request: Request) -> JSONResponse:
         "last_updated": broadcaster.last_updated,
         "subscribers": broadcaster.subscriber_count,
         "in_game_window": _is_game_window(),
+        "week_is_hot": _week_is_hot(),
+        "game_state": (broadcaster.latest or {}).get("game_state"),
         "poll_interval": (
-            config.POLL_INTERVAL_LIVE if _is_game_window() else config.POLL_INTERVAL_IDLE
+            config.POLL_INTERVAL_LIVE
+            if (_is_game_window() or _week_is_hot())
+            else config.POLL_INTERVAL_IDLE
         ),
         "cache": cache.memory.stats(),
         "error": broadcaster.last_error,
@@ -267,6 +328,7 @@ routes = [
     Route("/", index),
     Route("/api/allplay", api_allplay),
     Route("/api/week/{week}", api_week),
+    Route("/api/draft", api_draft),
     Route("/api/health", api_health),
     Route("/api/stream", api_stream),
     Mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static"),

@@ -87,12 +87,17 @@ async def request_json(
     *,
     retries: Optional[int] = None,
     timeout: Optional[float] = None,
+    headers: Optional[Dict[str, str]] = None,
 ) -> Any:
     """
     GET a URL and return parsed JSON, retrying transient failures.
 
     Retries on 429, 5xx, and timeouts with exponential backoff. Does not retry
     4xx other than 429, since those will not resolve themselves.
+
+    ``headers`` merges into the pooled client's own for this one request. Some
+    third party endpoints are picky about the User-Agent a bot sends, and the
+    pooled default announces exactly that.
     """
     attempts = config.MAX_RETRIES if retries is None else retries
     client = get_client()
@@ -105,6 +110,7 @@ async def request_json(
                 url,
                 params=params,
                 timeout=timeout or config.HTTP_TIMEOUT,
+                headers=headers,
             )
             if resp.status_code == 429 or resp.status_code >= 500:
                 last_exc = SleeperAPIError(

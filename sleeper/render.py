@@ -19,6 +19,11 @@ def all_play_table(payload: Dict[str, Any]) -> str:
     league = payload.get("league") or {}
     teams: List[Dict[str, Any]] = payload.get("teams") or []
 
+    # The payload is ordered by the real standing, which is what the dashboard
+    # leads with. This table is about all play, so it sorts on that instead and
+    # its numbering matches its own order.
+    teams = sorted(teams, key=lambda t: t.get("all_play_rank", 99))
+
     header = f"# 🥊 All Play Standings — {league.get('name', 'League')}"
     if payload.get("state") == "no_games_played":
         return (
@@ -27,15 +32,19 @@ def all_play_table(payload: Dict[str, Any]) -> str:
             "record to compute. Check back after week 1."
         )
 
-    weeks = payload.get("weeks_available") or []
+    # Only final weeks feed the standings; the live week is display only.
+    live_week = payload.get("live_week")
+    weeks = payload.get("final_weeks") or [
+        w for w in (payload.get("weeks_available") or []) if w != live_week
+    ]
     lines = [
         header,
         "",
         f"*Through week {max(weeks) if weeks else 0} — every team scored against "
         f"every other team, every week.*",
         "",
-        "| # | Team | Real | All Play | AP% | Luck | Avg Pts |",
-        "|---|------|------|----------|-----|------|---------|",
+        "| AP# | Team | Place | Real | All Play | AP% | Luck | Avg Pts |",
+        "|-----|------|-------|------|----------|-----|------|---------|",
     ]
 
     for t in teams:
@@ -48,6 +57,7 @@ def all_play_table(payload: Dict[str, Any]) -> str:
         lines.append(
             f"| {t.get('all_play_rank', '?')} "
             f"| {t.get('team_name', '?')} "
+            f"| {t.get('rank', '?')} "
             f"| {_record(t.get('real_wins', 0), t.get('real_losses', 0), t.get('real_ties', 0))} "
             f"| {_record(t.get('all_play_wins', 0), t.get('all_play_losses', 0))} "
             f"| {t.get('all_play_pct', 0):.1%} "
